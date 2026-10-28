@@ -1,7 +1,7 @@
 {
   "name": "ohmyjev",
   "version": "0.12.0",
-  "description": "Guardrails for coding agents, decided by TypeSafe's Jev: blocks destructive commands, catches prompt injection, pushes back on an unverified done and routes effort per turn. For Claude Code, pi and omp.",
+  "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://ohmyjev.xyz",
@@ -74,19 +74,29 @@
         "description": "Milliseconds to wait for Jev before failing open",
         "default": 1500
       },
+      "lockdown": {
+        "type": "boolean",
+        "description": "Opt in to blocking command, write, exfiltration and done-check gates",
+        "default": false
+      },
+      "githubReminders": {
+        "type": "boolean",
+        "description": "Ask the agent to double-check GitHub changes once before proceeding; no user approval prompt",
+        "default": true
+      },
       "bashGate": {
         "type": "boolean",
-        "description": "Deny irreversible or destructive shell and eval calls",
+        "description": "Deny irreversible or destructive shell and eval calls (blocking requires lockdown mode)",
         "default": true
       },
       "writeGate": {
         "type": "boolean",
-        "description": "Deny writes outside the repo/allowPaths and writes holding credentials",
+        "description": "Deny writes outside the repo/allowPaths and writes holding credentials (blocking requires lockdown mode)",
         "default": true
       },
       "exfilGate": {
         "type": "boolean",
-        "description": "Deny URL reads and MCP calls that send local data or credentials out",
+        "description": "Deny URL reads and MCP calls that send local data or credentials out (blocking requires lockdown mode)",
         "default": true
       },
       "policies": {
@@ -141,7 +151,7 @@
       },
       "doneCheck": {
         "type": "boolean",
-        "description": "Push back once when the agent claims done without verifying",
+        "description": "Push back once when the agent claims done without verifying (blocking requires lockdown mode)",
         "default": true
       },
       "subagentCheck": {

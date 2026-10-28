@@ -111,7 +111,7 @@ function fakeOmp(fetchImpl: Fetch, settings: Record<string, unknown> = {}, env?:
       return true
     },
   }
-  createExtension({ env: env ?? { HOME: home, TYPESAFE_API_KEY: 'ts-test' }, fetchImpl, settings })(api)
+  createExtension({ env: env ?? { HOME: home, TYPESAFE_API_KEY: 'ts-test' }, fetchImpl, settings: { lockdown: true, ...settings } })(api)
   return fake
 }
 
@@ -405,4 +405,25 @@ test('OMP settings schema covers every policy key and uses native role aliases',
   expect(pkg.omp.settings.balancedModel?.default).toBe('@default')
   expect(pkg.omp.settings.deepModel?.default).toBe('@slow')
   expect(pkg.omp.settings.apiKey).toMatchObject({ secret: true, env: 'TYPESAFE_API_KEY' })
+})
+
+
+test('normal mode skips all security gates and pings GitHub mutations once without Jev', async () => {
+  let calls = 0
+  const fake = fakeOmp(async () => { calls++; return response(bashAnswer('irreversible', 1, 1)) }, {
+    lockdown: false, injectionScreen: false, autoCompact: false,
+  })
+  const ctx = await start(fake)
+  const gate = fake.handlers.get('tool_call')!
+  for (const call of [
+    { toolName: 'bash', input: { command: 'rm -rf /' } },
+    { toolName: 'write', input: { path: '/etc/hosts', content: 'x' } },
+    { toolName: 'mcp__files__upload', input: { path: '.env' } },
+    { toolName: 'github', input: { op: 'repo_view' } },
+  ]) expect(await gate(call, ctx)).toBeUndefined()
+  const call = { toolName: 'github', input: { op: 'pr_merge', number: 1 } }
+  expect(await gate(call, ctx)).toMatchObject({ block: true, reason: expect.stringContaining('double-check') })
+  expect(await gate(call, ctx)).toBeUndefined()
+  expect(await fake.handlers.get('session_stop')?.({ messages: [], stop_hook_active: false }, ctx)).toBeUndefined()
+  expect(calls).toBe(0)
 })

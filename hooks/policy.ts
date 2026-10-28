@@ -9,6 +9,8 @@ export const DEFAULTS = {
   apiKey: '',
   jevModel: 'jev-1.13.0',
   enabled: true,
+  lockdown: false,
+  githubReminders: true,
   bashGate: true,
   writeGate: true,
   injectionScreen: true,
@@ -70,6 +72,49 @@ export type Config = typeof DEFAULTS
 export const readConfig = (options: Readonly<Record<string, unknown>>): Config => ({ ...DEFAULTS, ...options }) as Config
 
 export const splitList = (s: string): string[] => s.split(';').map(x => x.trim()).filter(Boolean)
+
+/** A lightweight checkpoint, not a security classifier. Unknown GitHub operations get a reminder too. */
+export function githubMutation(tool: string, input: Readonly<Record<string, unknown>>): boolean {
+  const command = typeof input.command === 'string' ? input.command : ''
+  if (/^(?:Bash|bash|powershell|mcp__custom-tools__bash)$/.test(tool)) {
+    // This is a convenience reminder. Shell parsing and aliases are not a security boundary.
+    return command.split(/[;&|\n]+/).some(part => {
+      const words = part.trim().match(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g) ?? []
+      while (words[0] && /^(?:[A-Za-z_]\w*=.*|env|command|sudo)$/.test(words[0])) words.shift()
+      const program = words.shift()?.split('/').at(-1)
+      if (program !== 'git' && program !== 'gh') return false
+      while (words[0]?.startsWith('-')) {
+        const option = words.shift()
+        if (/^(?:-C|-c|--git-dir|--work-tree|-R|--repo|--hostname)$/.test(option ?? '')) words.shift()
+      }
+      const group = words.shift()
+      if (program === 'git') return group === 'push'
+      if (group === 'api') {
+        return words.some((word, index) =>
+          /^(?:--(?:raw-)?field(?:=|$)|-[fF])/.test(word) ||
+          /^(?:--method=|-X)(?:POST|PUT|PATCH|DELETE)$/i.test(word) ||
+          (/^(?:--method|-X)$/.test(word) && /^(?:POST|PUT|PATCH|DELETE)$/i.test(words[index + 1] ?? '')))
+      }
+      return /^(?:create|edit|delete|merge|close|reopen|comment|review|enable|disable|run|rerun|cancel|dispatch|upload|set|remove|add|fork|archive|unarchive|rename|transfer|sync|lock|unlock|ready|revert)$/.test(words[0] ?? '')
+    })
+  }
+  if (tool === 'github' || /github/i.test(tool)) {
+    const operation = tool === 'github' ? String(input.op ?? '') : tool.split('__').at(-1) ?? tool
+    return !/^(?:get|list|search|read|view|fetch|check)(?:_|$)|_(?:get|list|read|view|watch|status|checks|diff)$|^actions_(?:get|list)(?:_|$)/i.test(operation)
+  }
+  return false
+}
+
+/** Ping the agent once per distinct call in this session. Retrying acknowledges the reminder, without a user prompt. */
+export function githubCheckpoint(tool: string, input: Readonly<Record<string, unknown>>, seen: Set<string>): string | undefined {
+  if (!githubMutation(tool, input)) return undefined
+  const key = JSON.stringify([tool, input])
+  if (seen.has(key)) return undefined
+  seen.add(key)
+  return '[ohmyjev] Before changing GitHub or pushing commits, double-check the repository, branch, target and effect. ' +
+    'Be sure this is what the user intended. This call has not run. If the action is already authorized and correct, ' +
+    'repeat the same tool call to proceed. This reminder alone does not require asking the user for approval.'
+}
 
 // --- Jev wire types ---
 
@@ -588,7 +633,7 @@ export type LogEntry = {
 export const OMJ_HELP = 'usage: /omj [stats|config [section|name value]|on|off]. /ohmyjev is the same command.'
 export const DASHBOARD = 'dashboard.html'
 export const OMJ_OFF = 'ohmyjev off for this session: every call passes through. /omj on turns it back. The enabled setting is the default for new sessions.'
-export const OMJ_ON = 'ohmyjev on: gates, screens, done-check and router are back for this session.'
+export const OMJ_ON = 'ohmyjev on for this session. Blocking gates require lockdown; screens and router follow their settings.'
 /** `/omj on|off` as the new enabled value; undefined for any other argument. */
 export const toggleArg = (args: string): boolean | undefined => ({ on: true, off: false })[args.trim() as 'on' | 'off']
 /**
@@ -598,7 +643,7 @@ export const toggleArg = (args: string): boolean | undefined => ({ on: true, off
  */
 export const SECTIONS = {
   jev: ['enabled', 'apiKey', 'jevModel', 'maskSecrets', 'timeoutMs'],
-  gates: ['bashGate', 'writeGate', 'exfilGate', 'policies', 'allowPaths', 'bashIrreversible', 'bashDestructive', 'writeSecret', 'writeSecretsKind', 'exfil', 'requested'],
+  gates: ['lockdown', 'githubReminders', 'bashGate', 'writeGate', 'exfilGate', 'policies', 'allowPaths', 'bashIrreversible', 'bashDestructive', 'writeSecret', 'writeSecretsKind', 'exfil', 'requested'],
   checks: ['injectionScreen', 'screenReads', 'doneCheck', 'subagentCheck', 'proseCheck', 'stuckCheck', 'injection', 'doneClaimed', 'doneVerifiedMax', 'doneAsksUserMax', 'stuck'],
   speed: ['autoApprove', 'trimOutput', 'skillPick', 'readNarrow', 'approveConfidence', 'approveRiskMax', 'trimOver', 'trimKeep', 'skillGate', 'skillMin'],
   compaction: ['fastCompact', 'autoCompact', 'compactSwitched', 'compactBoundary', 'compactMinPercent'],

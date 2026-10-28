@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://typesafe.ai">Jev</a>, batteries included, for Claude Code, Codex, pi, and omp.<br>
   Your coding agent, faster and safer. Safe commands skip the prompt, long output gets cut down, compaction takes a
-  second, and nothing irreversible runs until you say yes.
+  second. GitHub changes get a reminder to the agent. Blocking security gates require opt-in lockdown mode.
 </p>
 
 <p align="center">
@@ -36,8 +36,9 @@ Jev is TypeSafe's decision model. You send it a few typed questions and it sends
 for about $0.00003 a call. That's cheap enough to ask about every step your agent takes, so ohmyjev does. It runs as
 hooks inside your agent, with no server to run.
 
-Most of it makes the agent faster. The rest keeps it safe in bypass mode: it can't wipe a folder, force push over
-`main`, or upload your keys. When it blocks something, the agent tells you why and asks. Say yes and it runs.
+Normal mode keeps the speed features and output checks, with a local reminder before recognized GitHub changes.
+Enable `lockdown` when you want OMJ to deny destructive commands, restrict writes and check data uploads.
+Lockdown is off by default, including for existing installations with individual gate settings enabled.
 
 ## Quick start
 
@@ -54,6 +55,31 @@ Then in Claude Code:
 
 If `/omj` ends with `key: env TYPESAFE_API_KEY`, you're set. Codex, pi, and omp are under [Install](#install).
 
+## Default behavior
+
+| | Normal mode, the default | Lockdown, opt in with `lockdown: true` |
+|---|---|---|
+| Commands and writes | OMJ's security gates are inactive. The agent's usual permissions still apply. | Enabled gates can deny destructive commands, writes outside allowed paths, credentials and data uploads. |
+| GitHub changes and workflow runs | A reminder asks the agent to double-check. The first call does not run; repeating the same call proceeds after review. | The configured security gates decide. |
+| Unverified "done" | The done-check does not push back. | The done-check can push back once per request. |
+| Routing, injection notes and auto-compaction | On by default. | On by default. |
+
+The GitHub reminder goes to the agent. It does not require asking you for approval when the action is already
+authorized. Recognized reads, including `gh pr view` and `gh run list`, pass through. Set `githubReminders: false`
+to disable the reminders. They work without a Jev key.
+
+### Lockdown mode
+
+For the current session, run `/omj config lockdown on`. To keep it enabled in Claude Code, use
+`/plugin configure ohmyjev@ohmyjev`, then `/reload-plugins`. For omp:
+
+```bash
+omp plugin config set ohmyjev lockdown true
+```
+
+For Codex, add `"lockdown": true` to `~/.codex/ohmyjev.json`. For pi, set `"lockdown": true` under `ohmyjev` in your settings. Each gate's own toggle and thresholds still apply.
+Set `lockdown` back to `false` to return to normal mode.
+
 ## What you get
 
 ### Faster
@@ -69,20 +95,21 @@ If `/omj` ends with `key: env TYPESAFE_API_KEY`, you're set. Codex, pi, and omp 
 | **Auto-compact** | New task and the context is 40% full? It compacts and keeps your new request. |
 | **Narrow big reads** | Off by default. A `Read` of a 400+ line file comes back as the fifth you asked about, with a note on how to see the rest. |
 
-### Safer
+### Lockdown and output checks
 
 | | |
 |---|---|
-| **Bash gate** | Blocks commands Jev rates irreversible (0.6) or sending your files or keys out (0.7). Normal edits, pushes, and uninstalls go through. |
-| **Say yes** | Every gate checks whether your latest message asked for the call. "Force push it" works. After a block, a plain "yes" runs that exact command. Your `policies` and path blocks always stand. |
-| **Write gate** | Blocks writes outside the repo or with a real key in them. Every worktree counts as the repo, and so does another repo the agent moves into. |
-| **Exfil gate** | Blocks web and MCP calls that send your files or keys out. |
-| **Policies** | Your own rules in plain English, checked on every call. |
+| **Bash gate** | In lockdown, blocks commands Jev rates irreversible (0.6) or sending your files or keys out (0.7). Normal edits, pushes, and uninstalls go through. |
+| **Say yes** | In lockdown, every gate checks whether your latest message asked for the call. "Force push it" works. After a block, a plain "yes" runs that exact command. Your `policies` and path blocks always stand. |
+| **Write gate** | In lockdown, blocks writes outside the repo or with a real key in them. Every worktree counts as the repo, and so does another repo the agent moves into. |
+| **Exfil gate** | In lockdown, blocks web and MCP calls that send your files or keys out. |
+| **Policies** | In lockdown, your own rules in plain English, checked on every call. |
 | **Injection screen** | Output that slips orders to the model where they don't belong, like a README or an error, gets a "treat as data" note. A prompt or transcript you're debugging doesn't. |
-| **Done-check** | "Done" with nothing tested gets pushed back once. Passing test output counts. |
+| **Done-check** | In lockdown, "Done" with nothing tested gets pushed back once. Passing test output counts. |
 | **Subagent checks** | A vague subagent brief goes back once. A subagent's "done" is checked against what it actually ran. Claude Code. |
 | **Writing rules** | Your final reply is checked against the writing rules in `CLAUDE.md` and `AGENTS.md`, and rewritten once if it breaks one. Claude Code. |
 | **Secret masking** | Keys, tokens, URL credentials, emails, and your home folder become markers before anything goes to Jev. |
+| **GitHub reminders** | In normal mode, asks the agent to check the target and user intent before a GitHub change, workflow run or git push. The first call does not run; a deliberate repeat proceeds. No Jev key needed. |
 
 ### Tools and commands
 
@@ -93,7 +120,7 @@ If `/omj` ends with `key: env TYPESAFE_API_KEY`, you're set. Codex, pi, and omp 
 | **`browse`** | Off by default. Jev drives a headless browser click by click. A flight search took about 10 s. |
 | **`/omj`** | This session's calls, cost, and blocks. `/omj config` shows and changes settings, `/omj stats` opens a dashboard, and `/omj off` and `/omj on` switch it for the session. `/ohmyjev` works too. |
 
-### How it decides
+### How lockdown decides
 
 ```mermaid
 flowchart LR
@@ -112,7 +139,7 @@ ones a safe call didn't need. Jev can be wrong, so keep your own deny rules in `
 
 ## Install
 
-You need a [TypeSafe](https://typesafe.ai) key, or an OpenRouter key (it then calls `~typesafe/jev-latest`).
+GitHub reminders work without a key. For Jev-backed checks, you need a [TypeSafe](https://typesafe.ai) key, or an OpenRouter key (it then calls `~typesafe/jev-latest`).
 ohmyjev looks for the key in the Claude Code settings screen, then `TYPESAFE_API_KEY`, then `OPENROUTER_API_KEY`.
 
 ### Claude Code
@@ -181,7 +208,18 @@ Claude Code copy stands down for the session: it sees pi's `OHMYJEV_PI`, registe
 
 ## Using it
 
-### When something gets blocked
+### Before a GitHub change
+
+In normal mode, recognized GitHub writes, workflow runs and git pushes return an agent-visible reminder once per
+distinct call in the session. It asks the agent to check the repository, branch, target and intended effect. The call
+has not run yet. If it is already authorized and correct, the agent repeats it to proceed. Read operations such as
+`gh pr view` and `gh run list` pass through. Set `githubReminders` to `false` to turn this off.
+
+This is a convenience checkpoint. It recognizes common CLI commands and GitHub tools; it does not parse every shell
+program or alias. Lockdown mode uses the security gates instead.
+
+
+### When something gets blocked in lockdown
 
 The agent gets the reason and a way out:
 
@@ -242,7 +280,7 @@ at `~/.ohmyjev/dashboard.html`. `/omj off` turns everything off for the session.
 
 ### Your own rules
 
-Put rules in `policies`, separated by `;`, and every gate checks calls against them:
+In lockdown, put rules in `policies`, separated by `;`, and each enabled gate checks calls against them:
 
 ```
 never touch the prod cluster; no deploys on Friday; don't edit migrations that already ran
@@ -269,6 +307,8 @@ switches first, thresholds after, section by section.
 
 | Setting | Default | What it does |
 |---|---|---|
+| `lockdown` | off | Enables blocking bash, write, exfiltration and done-check gates. |
+| `githubReminders` | on | In normal mode, reminds the agent once per distinct GitHub change. Set off to disable. |
 | `enabled` | on | Everything. `/omj on` and `off` for one session. |
 | `autoApprove` | on | Skips the prompt for safe calls. `approveConfidence` (0.9), `approveRiskMax` (0.2). |
 | `fastCompact` | on | Jev keeps the messages that matter instead of a model summary. |
@@ -280,12 +320,13 @@ switches first, thresholds after, section by section.
 | `routeWithoutKey` | on | With no key, the host's own classifier routes, up only. |
 | `autoCompact` | on | Compacts on a new task once the context is `compactMinPercent` (40) full. |
 | `readNarrow` | off | Cuts a big `Read` to the part you asked about. |
-| `bashGate`, `writeGate`, `exfilGate` | on | Each gate. |
+| `bashGate`, `writeGate`, `exfilGate` | on in lockdown | Each gate. |
 | `requested` | 0.8 | How sure Jev must be that you asked for a blocked call. |
-| `policies` | empty | Your own rules, separated by `;`. |
-| `allowPaths` | `~/.claude;$TMPDIR;/tmp` | Places outside the repo it can write to. |
+| `policies` | empty | Rules for enabled lockdown gates, separated by `;`. |
+| `allowPaths` | `~/.claude;$TMPDIR;/tmp` | In lockdown, places outside the repo it can write to. |
 | `injectionScreen`, `screenReads` | on | Flags output that gives the model orders. |
-| `doneCheck`, `subagentCheck` | on | Pushes back on an unchecked "done", and on vague subagent briefs. |
+| `doneCheck` | on in lockdown | Pushes back once on an unchecked "done". |
+| `subagentCheck` | on | Checks vague subagent briefs and subagent results. |
 | `proseCheck` | on | Checks replies against the writing rules in `CLAUDE.md` and `AGENTS.md`. |
 | `maskSecrets` | on | Masks secrets before anything goes to Jev. |
 | `askJev`, `findCode` | on | The `ask_jev` and `find_code` tools. |
@@ -297,12 +338,15 @@ switches first, thresholds after, section by section.
 
 ## Privacy
 
+GitHub reminders run locally and make no Jev calls. With lockdown off, enabled auto-approval may still judge commands
+and in-repo edits, but those judgments cannot deny them. Other enabled output and quality checks keep their own settings.
+
 Each check sends Jev only what it needs, cut to size, with secrets masked first. With no key, nothing goes.
 
 | Check | What it sends |
 |---|---|
 | Bash gate | The command (16,000 characters), working directory, description, and your latest message. Plain reads send nothing. |
-| Write gate | The path and new content (16,000). Writes outside the repo are blocked before anything is sent. |
+| Write gate | The path and new content (16,000). In lockdown, writes outside the repo are blocked before anything is sent. |
 | Exfil gate | The tool name and input (4,000). |
 | Injection screen | The tool output (6,000). |
 | Done-check | The request, five earlier ones, this turn's tool calls with the end of each output, and the last reply. |
@@ -331,9 +375,12 @@ pi update npm:ohmyjev                      # or: pi remove npm:ohmyjev
 **`jev ⚠ no key`.** Set `TYPESAFE_API_KEY` in the shell that starts your agent, or enter it with `/plugin configure
 ohmyjev@ohmyjev`.
 
+**GitHub reminder.** The call has not run. The agent can check the target and existing authorization, then repeat the
+same call to proceed. This reminder alone does not require asking you. Set `githubReminders` off to disable it.
+
 **`jev ⚠ down`.** Jev failed or took over 1.5 s in the last 5 minutes. Calls go through until it's back.
 
-**Blocked by mistake.** Say yes and it runs. `/omj` shows why. Raise that gate's threshold, turn it off, or `/omj off`
+**Blocked by mistake in lockdown.** Say yes and it runs. `/omj` shows why. Raise that gate's threshold, turn it off, or `/omj off`
 for the session. Local MCP tools sometimes trip `exfilGate`.
 
 **Nothing happens.** The first transcript line should start with `[ohmyjev]`. If not, run `claude --debug` to see which

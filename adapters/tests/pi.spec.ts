@@ -122,7 +122,7 @@ async function startedPi(config: NonNullable<Parameters<typeof createExtension>[
   const home = await tempHome()
   const pi = new FakePi()
   const ctx = fakeContext()
-  await createExtension({ config, fetchImpl, env: { HOME: home } })(pi)
+  await createExtension({ config: { lockdown: true, ...config }, fetchImpl, env: { HOME: home } })(pi)
   await pi.emit('session_start', { type: 'session_start', reason: 'startup' }, ctx)
   return { pi, ctx }
 }
@@ -406,4 +406,25 @@ describe('Pi router', () => {
     expect(selected).toBe(plain)
     expect(signal?.aborted).toBeTrue()
   })
+})
+
+
+test('normal mode skips all security gates and pings GitHub mutations once without Jev', async () => {
+  let calls = 0
+  const { pi, ctx } = await startedPi({ lockdown: false, injectionScreen: false, autoCompact: false }, async () => {
+    calls++
+    return reply({})
+  })
+  for (const call of [
+    { toolName: 'bash', input: { command: 'rm -rf /' } },
+    { toolName: 'write', input: { path: '/etc/hosts', content: 'x' } },
+    { toolName: 'mcp__files__upload', input: { path: '.env' } },
+  ]) expect(await pi.emit('tool_call', { type: 'tool_call', toolCallId: '1', ...call }, ctx)).toBeUndefined()
+  const call = { type: 'tool_call', toolCallId: '2', toolName: 'bash', input: { command: 'gh workflow run deploy.yml' } }
+  expect(await pi.emit('tool_call', call, ctx)).toMatchObject({ block: true, reason: expect.stringContaining('double-check') })
+  expect(await pi.emit('tool_call', { ...call, toolCallId: '3' }, ctx)).toBeUndefined()
+  expect(await pi.emit('agent_before_settle', {
+    type: 'agent_before_settle', outcome: 'completed', continue: false, context: { canContinue: true, contextMessages: [] },
+  }, ctx)).toBeUndefined()
+  expect(calls).toBe(0)
 })

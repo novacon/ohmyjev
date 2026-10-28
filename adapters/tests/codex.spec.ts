@@ -11,6 +11,7 @@ beforeAll(async () => {
   home = await realpath(await mkdtemp(`${tmpdir()}/ohmyjev-codex-`))
   repo = `${home}/repo`
   execFileSync('git', ['init', '-q', repo])
+  await Bun.write(`${home}/.codex/ohmyjev.json`, JSON.stringify({ lockdown: true }))
 })
 afterAll(() => rm(home, { recursive: true, force: true }))
 
@@ -60,7 +61,7 @@ test('Codex: injected output gets a note; the done-check pushes back once per re
 test('Codex: enabled false in ~/.codex/ohmyjev.json passes everything', async () => {
   await Bun.write(`${home}/.codex/ohmyjev.json`, JSON.stringify({ enabled: false }))
   expect(await ev(rmrf)).toBe(undefined)
-  await rm(`${home}/.codex/ohmyjev.json`)
+  await Bun.write(`${home}/.codex/ohmyjev.json`, JSON.stringify({ lockdown: true }))
 })
 
 // Bun versions name temporaries differently, so the byte check runs only on the Bun publish.yml pins.
@@ -88,4 +89,17 @@ test('Codex: three failures that repeat one approach get a change-approach note'
   expect(await fail(2)).toBe(undefined)
   const third = (await fail(3)) as { hookSpecificOutput: { additionalContext: string } }
   expect(third.hookSpecificOutput.additionalContext).toContain('Stop repeating it')
+})
+
+
+test('Codex: normal defaults do not deny unsafe calls and reminders survive fresh hook processes', async () => {
+  await rm(`${home}/.codex/ohmyjev.json`)
+  answers = { effect: { type: 'choice', choice: 'irreversible', confidence: 0.98 }, destructive_intent: n(0.9), exfiltrates: n(0), requested: n(0) }
+  expect(await ev(rmrf)).toBeUndefined()
+  expect(await ev({ hook_event_name: 'PreToolUse', tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Add File: /etc/x.conf\n+x\n*** End Patch' } })).toBeUndefined()
+  const call = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'gh workflow run deploy.yml' } }
+  expect(await ev(call)).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining('double-check') } })
+  expect(await ev(call)).toBeUndefined()
+  expect(await ev({ hook_event_name: 'Stop', last_assistant_message: 'Done.' })).toBeUndefined()
+  await Bun.write(`${home}/.codex/ohmyjev.json`, JSON.stringify({ lockdown: true }))
 })

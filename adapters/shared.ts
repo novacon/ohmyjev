@@ -306,7 +306,7 @@ export async function runBrowse(
 ): Promise<{ text: string } | { deny: string }> {
   const c = x.c
   if (!c.browse) return { text: JSON.stringify({ error: 'browse is off: /omj config browse on' }) }
-  if (c.enabled && c.exfilGate) {
+  if (c.enabled && c.lockdown && c.exfilGate) {
     const state = withPolicies({ tool: 'browse', input: clip(JSON.stringify(input), 4000) }, c, request, blockedBefore)
     const d = await x.decide('tool.call', 'browse', state, withPolicyQ(EXFIL_Q, c, request))
     if (d) {

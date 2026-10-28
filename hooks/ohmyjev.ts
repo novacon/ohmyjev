@@ -9,7 +9,7 @@ import { MIN_REPLY, broken, extractionPrompt, filesHash, parseRules, rewriteReas
 import { dashboardHtml } from './dashboard.ts'
 import { ENDPOINTS, JevError, parseReply, pickKey, type Key } from './jev.ts'
 import {
-  BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
+  githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
   EMPTY_SESSION, absolute, clip, denyText, expandRoot, gateBash, gateExfil, gateWrite, hostPath, isUnder, judgeStop, normalize, parseWorktrees, pathDenyText, rawAbsolute,
   ASK_DESCRIPTION, ASK_SCHEMA, buildQuestion, builtinRoute, decideRoute, jevRouteLine, keepInstructions, statusText, stepLine, summarize, modelOf, readConfig, routeStep,
   BROWSE_DESCRIPTION, BROWSE_SCHEMA, BROWSE_TIMEOUT_MS, browseCommand, browseReply, STUCK_Q, BRIEF_Q, maskSecrets, SUBAGENT_DONE_REASON, judgeBrief, fitsQuestion, pickSkill, skillFits, skillNote, skillQuestions, trimChunks, trimRequest, trimmed, approveBash, approveWrite, failureOf, judgeStuck, stuckDue, stuckState, type Failure, callSummary, clipTail, configCommand, plainRead, sanitizeSid, screen, splitList, withPolicies, withPolicyQ, TIER_LABELS, DASHBOARD, OMJ_HELP, OMJ_OFF, OMJ_ON, parseLog, toggleArg,
@@ -151,6 +151,7 @@ function appendLog($: $, p: Paths, entry: LogEntry): void {
 
 // Per load: register() resets them; the engine follows `$` only into top-level functions of this file.
 let c: Config = readConfig({})
+let githubSeen = new Set<string>()
 let ctx: Ctx | undefined
 let pushedBackAt = -1 // request count when the done-check last pushed back: once per request
 let route: Route | undefined // this turn's classification; undefined routes nothing
@@ -270,6 +271,7 @@ function blocked(j: Judged, tool: string, input: unknown): string | undefined {
 }
 
 async function gate($: $, e: { tool: string }): Promise<string | undefined> {
+  if (!c.lockdown && !c.autoApprove) return undefined
   const tool = String(e.tool)
   const kind = kindOf(tool)
   const cwd = await $.session.cwd()
@@ -283,13 +285,14 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
     const d = await decide($, 'tool.call', tool, withPolicies(state, c, userRequest, blockedBefore), withPolicyQ(BASH_Q, c, userRequest))
     if (!d) return undefined
     const j = gateBash(d.answers, c)
-    record($, d, j.verdict, j.reason)
+    record($, d, c.lockdown ? j.verdict : null, j.reason)
     if (j.verdict === null && approveBash(d.answers, c)) approved.add(approvalKey(kind, e))
-    return blocked(j, tool, e)
+    return c.lockdown ? blocked(j, tool, e) : undefined
   }
   if (WRITE_TOOLS.includes(kind) && c.writeGate) {
     const path = pathOf(e)
     if (path === null || !(await pathAllowed($, path, cwd))) {
+      if (!c.lockdown) return undefined
       const shown = path ?? arg(e, 'path')
       const x = await session($)
       x.s.denies++
@@ -302,18 +305,18 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
     const d = await decide($, 'tool.call', tool, withPolicies({ path, content: clip(content, CLIP) }, c, userRequest, blockedBefore), withPolicyQ(WRITE_Q, c, userRequest))
     if (!d) return undefined
     const j = gateWrite(d.answers, c)
-    record($, d, j.verdict, j.reason)
+    record($, d, c.lockdown ? j.verdict : null, j.reason)
     if (j.verdict === null && approveWrite(d.answers, c)) approved.add(approvalKey(kind, e))
-    return blocked(j, tool, e)
+    return c.lockdown ? blocked(j, tool, e) : undefined
   }
-  if ((kind === 'WebFetch' || kind.startsWith('mcp__')) && c.exfilGate) {
+  if ((kind === 'WebFetch' || kind.startsWith('mcp__')) && c.lockdown && c.exfilGate) {
     const { tool: _t, tool_use_id: _id, consent: _c, ...input } = e as Record<string, unknown>
     const state = withPolicies({ tool, input: clip(JSON.stringify(input), 4000) }, c, userRequest, blockedBefore)
     const d = await decide($, 'tool.call', tool, state, withPolicyQ(EXFIL_Q, c, userRequest))
     if (!d) return undefined
     const j = gateExfil(d.answers, c)
-    record($, d, j.verdict, j.reason)
-    return blocked(j, tool, e)
+    record($, d, c.lockdown ? j.verdict : null, j.reason)
+    return c.lockdown ? blocked(j, tool, e) : undefined
   }
   return undefined
 }
@@ -647,6 +650,7 @@ async function noteRoute($: $, label: string): Promise<void> {
 
 export const register: Register = (on, options) => {
   c = readConfig(options)
+  githubSeen = new Set<string>()
   ctx = undefined
   pushedBackAt = -1
   route = undefined
@@ -805,6 +809,11 @@ export const register: Register = (on, options) => {
       return c.enabled ? screenResult($, e, r) : r
     }
     if (!c.enabled) return next(e)
+    if (!c.lockdown && c.githubReminders) {
+      const { tool_use_id: _id, consent: _consent, tool: _tool, ...input } = e as Record<string, unknown>
+      const note = githubCheckpoint(String(e.tool), input, githubSeen)
+      if (note) return { deny: note }
+    }
     const denied = await gate($, e)
     if (denied) return { deny: denied }
     return checkStuck($, e, await screenResult($, e, await trimResult($, e, await next(e))))
@@ -814,7 +823,7 @@ export const register: Register = (on, options) => {
 
   on('classic.Stop', async ($, e, next) => {
     const r = await next(e)
-    if (!c.enabled || e.stop_hook_active || !(c.doneCheck || c.autoCompact || c.proseCheck)) return r
+    if (!c.enabled || e.stop_hook_active || !((c.lockdown && c.doneCheck) || c.autoCompact || c.proseCheck)) return r
     const msgs: SessionMessage[] = await $.session.messages()
     const isRequest = (m: SessionMessage) => m.role === 'user' && m.text.trim() !== ''
     const requests = msgs.filter(isRequest)
@@ -834,7 +843,7 @@ export const register: Register = (on, options) => {
     const d = await decide($, 'Stop', '', state, questions)
     if (!d) return r
     const j = judgeStop(d.answers, c, state.tools_this_turn.length > 0)
-    const block = c.doneCheck ? j.block : null
+    const block = c.lockdown && c.doneCheck ? j.block : null
     if (block) pushedBackAt = requests.length
     if (c.autoCompact && j.wantsCompact) compactPending = true
     record($, d, block ? 'block' : null, block ?? (j.wantsCompact ? 'task switched' : 'stop ok'))

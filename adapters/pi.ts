@@ -1,7 +1,7 @@
 import { asSummary, judgeable, select } from '../hooks/compact.ts'
 import { readFile } from 'node:fs/promises'
 import {
-  BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
+  githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
   TIER_LABELS, builtinRoute, clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, configCommand,
   BROWSE_DESCRIPTION, BROWSE_SCHEMA, OMJ_HELP, OMJ_OFF, OMJ_ON, toggleArg,
   keepInstructions, readConfig, routeStep, screen, stepLine, withPolicies, withPolicyQ,
@@ -256,6 +256,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
     // Claude Code started by pi-claude-bridge inherits this, and leaves pi's bridged tools to this copy (it runs them).
     process.env.OHMYJEV_PI = '1'
     const initialCwd = options.cwd ?? process.cwd()
+    const githubSeen = new Set<string>()
     let c = options.config ? readConfig(options.config) : await readSettings(initialCwd, env, false)
     let session: Session | undefined
     let root = initialCwd
@@ -433,6 +434,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
 
     pi.on('session_start', guarded(async (_event, ctx) => {
       reset()
+      githubSeen.clear()
       latestCtx = ctx
       userThinking = pi.getThinkingLevel()
       const x = await ensureSession(ctx)
@@ -498,7 +500,11 @@ export function createExtension(options: PiAdapterOptions = {}) {
       const x = await ensureSession(ctx)
       const tool = event.toolName
       const input = event.input
-      if ((tool === 'bash' || tool === 'powershell') && c.bashGate) {
+      if (!c.lockdown && c.githubReminders) {
+        const note = githubCheckpoint(tool, input, githubSeen)
+        if (note) return { block: true, reason: note }
+      }
+      if ((tool === 'bash' || tool === 'powershell') && c.lockdown && c.bashGate) {
         const command = arg(input, 'command')
         if (plainRead(command, c)) return // ls, git status, grep: code says read-only, no Jev call
         const state = withPolicies({ command: clip(command, CLIP), cwd: ctx.cwd, ...(command.length > CLIP ? { truncated: true } : {}) }, c, userRequest, blockedBefore)
@@ -512,7 +518,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
         }
         return
       }
-      if ((tool === 'write' || tool === 'edit') && c.writeGate) {
+      if ((tool === 'write' || tool === 'edit') && c.lockdown && c.writeGate) {
         const path = arg(input, 'path')
         if (!(await pathAllowed(path, ctx.cwd, root, c, env))) {
           x.denyByCode(tool, `${path} is outside the repo and allowPaths`)
@@ -529,7 +535,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
         }
         return
       }
-      if (tool.startsWith('mcp__') && c.exfilGate) {
+      if (tool.startsWith('mcp__') && c.lockdown && c.exfilGate) {
         const d = await x.decide(
           'tool.call',
           tool,
@@ -584,7 +590,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
 
     pi.on('agent_before_settle', guarded<BoundaryEvent, { entries: Array<Record<string, unknown>>; continue: true }>(async (event, ctx) => {
       latestCtx = ctx
-      if (!c.enabled || event.outcome !== 'completed' || event.continue || !event.context.canContinue || !(c.doneCheck || c.autoCompact)) return
+      if (!c.enabled || event.outcome !== 'completed' || event.continue || !event.context.canContinue || !((c.lockdown && c.doneCheck) || c.autoCompact)) return
       const { count, state } = messagesForStop(event.context.contextMessages)
       if (!count || count === pushedBackAt) return
       liveRequest = state.current_request
@@ -593,7 +599,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
       const d = await x.decide('Stop', '', state, questions)
       if (!d) return
       const judged = judgeStop(d.answers, c, state.tools_this_turn.length > 0)
-      const block = c.doneCheck ? judged.block : null
+      const block = c.lockdown && c.doneCheck ? judged.block : null
       if (block) pushedBackAt = count
       if (c.autoCompact && judged.wantsCompact) compactPending = true
       x.record(d, block ? 'block' : null, block ?? (judged.wantsCompact ? 'task switched' : 'stop ok'))

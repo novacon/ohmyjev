@@ -13,3 +13,11 @@ test('splitList splits on ; and trims', () => {
   expect(splitList(' ~/.claude ; $TMPDIR;;/tmp ')).toEqual(['~/.claude', '$TMPDIR', '/tmp'])
   expect(splitList('')).toEqual([])
 })
+
+
+test('blocking gates require an explicit lockdown opt-in, even with old gate settings', () => {
+  const c = readConfig({ bashGate: true, writeGate: true, exfilGate: true, doneCheck: true })
+  expect(c.lockdown).toBe(false)
+  expect(c.githubReminders).toBe(true)
+  expect(readConfig({ lockdown: true }).lockdown).toBe(true)
+})

@@ -12,7 +12,7 @@ Developers who run coding agents (Claude Code, Codex, pi, omp), often unattended
 
 ## Product Purpose
 
-ohmyjev puts Jev, TypeSafe's decision model, in front of every step a coding agent takes. Jev answers typed questions in about 160 ms for about $0.00003, cheap enough to ask about every call. ohmyjev uses those answers to make the agent faster (no prompt for safe commands, long output cut to what matters, the right skill loaded, the right model picked, a browser driven by Jev instead of the big model) and safer (irreversible or data-leaking commands stopped until the user says yes). Success: the agent finishes sooner and cheaper, and nothing irreversible happens that the user didn't ask for.
+ohmyjev puts Jev, TypeSafe's decision model, in front of every step a coding agent takes. Jev answers typed questions in about 160 ms for about $0.00003, cheap enough to ask about every call. ohmyjev uses those answers to make the agent faster (no prompt for safe commands, long output cut to what matters, the right skill loaded, the right model picked, a browser driven by Jev instead of the big model) and safer through opt-in lockdown that blocks irreversible or data-leaking commands. Normal mode gives GitHub reminders to the agent without requiring a user approval prompt. Success: the agent finishes sooner and cheaper, and nothing irreversible happens that the user didn't ask for.
 
 ## Positioning
 
@@ -25,7 +25,8 @@ Installed as a Claude Code plugin, a Codex plugin, and a pi/omp extension (npm `
 ## Capabilities and Constraints
 
 Faster: auto-approve, plain-read fast path, output trim, skill picker (Claude Code only), stuck check, model router, auto-compact, `browse` (jev-ultrafast, off by default).
-Safer: bash gate, write gate, exfil gate, policies, request-aware unblock ("say yes"), injection screen, done-check.
+Normal mode: GitHub reminders, injection screen and the speed features.
+Opt-in lockdown: bash gate, write gate, exfil gate, policies, request-aware unblock ("say yes"), done-check. Lockdown defaults off.
 Tools: `ask_jev`, `/omj`, `/omj config`, `/omj stats`, `/omj on|off`.
 Codex hooks can't add tools or commands; pi and omp never ask permission, so auto-approve has nothing to answer there.
 

@@ -1,7 +1,7 @@
 {
   "name": "ohmyjev",
   "version": "0.12.0",
-  "description": "Jev for Claude Code: Bash and Write gates, an injection screen, and a done-check, decided by TypeSafe's Jev.",
+  "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "author": {
     "name": "lordknows13"
   },
@@ -44,22 +44,34 @@
       "description": "How long a gate, screen or the router waits for Jev before letting the call through",
       "default": 1500
     },
+    "lockdown": {
+      "type": "boolean",
+      "description": "Opt in to blocking command, write, exfiltration and done-check gates",
+      "default": false,
+      "title": "Lockdown security mode"
+    },
+    "githubReminders": {
+      "type": "boolean",
+      "description": "Ask the agent to double-check GitHub changes once before proceeding; no user approval prompt",
+      "default": true,
+      "title": "GitHub reminders"
+    },
     "bashGate": {
       "type": "boolean",
       "title": "Bash gate",
-      "description": "Deny irreversible or destructive commands",
+      "description": "Deny irreversible or destructive commands (blocking requires lockdown mode)",
       "default": true
     },
     "writeGate": {
       "type": "boolean",
       "title": "Write gate",
-      "description": "Deny writes outside the repo/allowPaths and writes holding credentials",
+      "description": "Deny writes outside the repo/allowPaths and writes holding credentials (blocking requires lockdown mode)",
       "default": true
     },
     "exfilGate": {
       "type": "boolean",
       "title": "Exfil gate",
-      "description": "Deny WebFetch and MCP calls that send local data, files or credentials out",
+      "description": "Deny WebFetch and MCP calls that send local data, files or credentials out (blocking requires lockdown mode)",
       "default": true
     },
     "policies": {
@@ -125,7 +137,7 @@
     "doneCheck": {
       "type": "boolean",
       "title": "Done-check",
-      "description": "Push back once when the agent claims done without verifying",
+      "description": "Push back once when the agent claims done without verifying (blocking requires lockdown mode)",
       "default": true
     },
     "subagentCheck": {

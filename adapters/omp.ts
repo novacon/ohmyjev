@@ -3,7 +3,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import {
-  BASH_Q, DEFAULTS, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
+  githubCheckpoint, BASH_Q, DEFAULTS, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
   clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, configCommand, applyPatchPaths,
   BROWSE_DESCRIPTION, OMJ_HELP, OMJ_OFF, OMJ_ON, toggleArg,
   keepInstructions, modelOf, readConfig, routeStep, screen, stepLine, withPolicies, withPolicyQ,
@@ -242,6 +242,7 @@ function askSchema(pi: OmpApi): unknown {
 export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi) => void {
   return (pi: OmpApi): void => {
     const env = options.env ?? process.env
+    const githubSeen = new Set<string>()
     let c: Config = readConfig(OMP_DEFAULTS)
     let session: Session | undefined
     let root = ''
@@ -393,6 +394,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
       c = await configAt(ctx.cwd, env, options.settings)
       root = await repoRoot(ctx.cwd)
       sessionGeneration++
+      githubSeen.clear()
       routedThinkingEntries.clear()
       userEffort = userThinking(ctx)
       session = new Session(c, env, ctx.sessionManager.getSessionId(), status, options.fetchImpl)
@@ -524,7 +526,11 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
         const event = rawEvent as ToolCall
         const tool = event.toolName
         const input = object(event.input)
-        if ((tool === 'bash' || tool === 'eval' || githubWrite(tool, input)) && c.bashGate) {
+        if (!c.lockdown && c.githubReminders) {
+          const note = githubCheckpoint(tool, input, githubSeen)
+          if (note) return { block: true, reason: note }
+        }
+        if ((tool === 'bash' || tool === 'eval' || githubWrite(tool, input)) && c.lockdown && c.bashGate) {
           if (tool === 'bash' && plainRead(string(input, 'command'), c)) return // code says read-only, no Jev call
           const command = tool === 'eval'
             ? string(input, 'code')
@@ -552,7 +558,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
         }
           return
         }
-        if (WRITE_TOOLS[tool] && c.writeGate) {
+        if (WRITE_TOOLS[tool] && c.lockdown && c.writeGate) {
           const paths = writePaths(tool, input)
           if (!paths.length) {
             const reason = `could not determine a destination path for ${tool}`
@@ -580,7 +586,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
         }
           return
         }
-        if (c.exfilGate && exfilTool(tool, input)) {
+        if (c.lockdown && c.exfilGate && exfilTool(tool, input)) {
           const d = await session.decide(
             'tool_call', tool,
             withPolicies({ tool, input: clip(safeJson(input), 4000) }, c, userRequest, blockedBefore),
@@ -637,7 +643,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
         if (!session || ctx.agent.kind !== 'main') return
         restoreUserThinking(ctx)
         if (!c.enabled) return
-        if (!(c.doneCheck || c.autoCompact)) return
+        if (!((c.lockdown && c.doneCheck) || c.autoCompact)) return
         const event = rawEvent as unknown as StopEvent
         if (event.stop_hook_active) {
           scheduleCompact(ctx)
@@ -668,7 +674,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           return
         }
         const judged = judgeStop(d.answers, c, state.tools_this_turn.length > 0)
-        const block = c.doneCheck ? judged.block : null
+        const block = c.lockdown && c.doneCheck ? judged.block : null
         if (block) pushedBackAt = requests.length
         if (c.autoCompact && judged.wantsCompact) compactPending = true
         session.record(d, block ? 'block' : null, block ?? (judged.wantsCompact ? 'task switched' : 'stop ok'))

@@ -6,6 +6,8 @@ var DEFAULTS = {
   apiKey: "",
   jevModel: "jev-1.13.0",
   enabled: true,
+  lockdown: false,
+  githubReminders: true,
   bashGate: true,
   writeGate: true,
   injectionScreen: true,
@@ -63,6 +65,45 @@ var DEFAULTS = {
 };
 var readConfig = (options) => ({ ...DEFAULTS, ...options });
 var splitList = (s) => s.split(";").map((x) => x.trim()).filter(Boolean);
+function githubMutation(tool, input) {
+  const command = typeof input.command === "string" ? input.command : "";
+  if (/^(?:Bash|bash|powershell|mcp__custom-tools__bash)$/.test(tool)) {
+    return command.split(/[;&|\n]+/).some((part) => {
+      const words = part.trim().match(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g) ?? [];
+      while (words[0] && /^(?:[A-Za-z_]\w*=.*|env|command|sudo)$/.test(words[0]))
+        words.shift();
+      const program = words.shift()?.split("/").at(-1);
+      if (program !== "git" && program !== "gh")
+        return false;
+      while (words[0]?.startsWith("-")) {
+        const option = words.shift();
+        if (/^(?:-C|-c|--git-dir|--work-tree|-R|--repo|--hostname)$/.test(option ?? ""))
+          words.shift();
+      }
+      const group = words.shift();
+      if (program === "git")
+        return group === "push";
+      if (group === "api") {
+        return words.some((word, index) => /^(?:--(?:raw-)?field(?:=|$)|-[fF])/.test(word) || /^(?:--method=|-X)(?:POST|PUT|PATCH|DELETE)$/i.test(word) || /^(?:--method|-X)$/.test(word) && /^(?:POST|PUT|PATCH|DELETE)$/i.test(words[index + 1] ?? ""));
+      }
+      return /^(?:create|edit|delete|merge|close|reopen|comment|review|enable|disable|run|rerun|cancel|dispatch|upload|set|remove|add|fork|archive|unarchive|rename|transfer|sync|lock|unlock|ready|revert)$/.test(words[0] ?? "");
+    });
+  }
+  if (tool === "github" || /github/i.test(tool)) {
+    const operation = tool === "github" ? String(input.op ?? "") : tool.split("__").at(-1) ?? tool;
+    return !/^(?:get|list|search|read|view|fetch|check)(?:_|$)|_(?:get|list|read|view|watch|status|checks|diff)$|^actions_(?:get|list)(?:_|$)/i.test(operation);
+  }
+  return false;
+}
+function githubCheckpoint(tool, input, seen) {
+  if (!githubMutation(tool, input))
+    return;
+  const key = JSON.stringify([tool, input]);
+  if (seen.has(key))
+    return;
+  seen.add(key);
+  return "[ohmyjev] Before changing GitHub or pushing commits, double-check the repository, branch, target and effect. " + "Be sure this is what the user intended. This call has not run. If the action is already authorized and correct, " + "repeat the same tool call to proceed. This reminder alone does not require asking the user for approval.";
+}
 var noul = (instructions, yes, no) => yes ? { type: "noul", instructions, criteria: { true: yes, false: no ?? "" } } : { type: "noul", instructions };
 var choice = (instructions, criteria) => ({ type: "choice", instructions, criteria });
 var score = (instructions, criteria) => ({ type: "score", instructions, criteria });
@@ -1023,7 +1064,7 @@ async function trimOutput(x, request, output, command) {
 
 // adapters/codex.ts
 var CLIP = 16000;
-var EMPTY = { request: "", previous: [], count: 0, blockedBefore: "", lastBlocked: "", tools: [], pushedBackAt: -1, approved: [], stuck: { failures: [], askedAt: 0 } };
+var EMPTY = { githubSeen: [], request: "", previous: [], count: 0, blockedBefore: "", lastBlocked: "", tools: [], pushedBackAt: -1, approved: [], stuck: { failures: [], askedAt: 0 } };
 var approvalKey = (tool, input) => `${tool}\x00${str(input, "command")}`;
 var str = (o, k) => typeof o[k] === "string" ? o[k] : "";
 var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
@@ -1077,6 +1118,17 @@ async function handle(input, env, fetchImpl) {
   const tool = str(input, "tool_name");
   const toolInput = obj(input.tool_input);
   if (event === "PreToolUse") {
+    if (!c.lockdown && c.githubReminders) {
+      const seen = new Set(st.githubSeen);
+      const note = githubCheckpoint(tool, toolInput, seen);
+      if (note) {
+        st.githubSeen = [...seen];
+        await save(env, sid, st);
+        return deny(note);
+      }
+    }
+    if (!c.lockdown && !c.autoApprove)
+      return;
     const approve = async () => {
       if (!c.autoApprove)
         return;
@@ -1087,7 +1139,7 @@ async function handle(input, env, fetchImpl) {
     const blocked = async (j, safe = false) => {
       if (j.verdict === null && safe)
         return approve();
-      if (j.verdict !== "deny")
+      if (j.verdict !== "deny" || !c.lockdown)
         return;
       st.lastBlocked = callSummary(tool, toolInput);
       await save(env, sid, st);
@@ -1102,7 +1154,7 @@ async function handle(input, env, fetchImpl) {
       if (!d)
         return;
       const j = gateBash(d.answers, c);
-      x.record(d, j.verdict, j.reason);
+      x.record(d, c.lockdown ? j.verdict : null, j.reason);
       return blocked(j, approveBash(d.answers, c));
     }
     if (tool === "apply_patch" && c.writeGate) {
@@ -1110,6 +1162,8 @@ async function handle(input, env, fetchImpl) {
       const root = await repoRoot(cwd);
       for (const path of applyPatchPaths(patch))
         if (!await pathAllowed(path, cwd, root, c, env)) {
+          if (!c.lockdown)
+            return;
           x.denyByCode(tool, `${path} is outside the repo and allowPaths`);
           return deny(pathDenyText(path));
         }
@@ -1118,16 +1172,16 @@ async function handle(input, env, fetchImpl) {
       if (!d)
         return;
       const j = gateWrite(d.answers, c);
-      x.record(d, j.verdict, j.reason);
+      x.record(d, c.lockdown ? j.verdict : null, j.reason);
       return blocked(j, approveWrite(d.answers, c));
     }
-    if (tool.startsWith("mcp__") && c.exfilGate) {
+    if (tool.startsWith("mcp__") && c.lockdown && c.exfilGate) {
       const state = withPolicies({ tool, input: clip(JSON.stringify(toolInput), 4000) }, c, st.request, st.blockedBefore);
       const d = await x.decide("tool.call", tool, state, withPolicyQ(EXFIL_Q, c, st.request));
       if (!d)
         return;
       const j = gateExfil(d.answers, c);
-      x.record(d, j.verdict, j.reason);
+      x.record(d, c.lockdown ? j.verdict : null, j.reason);
       return blocked(j);
     }
     return;
@@ -1168,7 +1222,7 @@ async function handle(input, env, fetchImpl) {
     return context();
   }
   if (event === "Stop") {
-    if (!c.doneCheck || input.stop_hook_active === true || st.pushedBackAt === st.count)
+    if (!c.lockdown || !c.doneCheck || input.stop_hook_active === true || st.pushedBackAt === st.count)
       return;
     const state = {
       current_request: clip(st.request, 600),
