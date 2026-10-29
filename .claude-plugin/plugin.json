@@ -1,6 +1,6 @@
 {
   "name": "ohmyjev",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "author": {
     "name": "lordknows13"

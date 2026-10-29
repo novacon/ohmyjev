@@ -21,7 +21,7 @@ claude plugin validate .
 4. `.github/workflows/publish.yml` then checks the tag matches `package.json`, runs the adapter tests and typecheck, and runs `npm publish`.
 
 Publishing facts:
-- npm trusted publishing: the npm package trusts `Novacon/ohmyjev` workflow `publish.yml` with the npm publish permission only (no dist-tag permission). No npm token exists anywhere.
+- npm trusted publishing: the npm package trusts `novacon/ohmyjev` workflow `publish.yml` (publish and stage publish; no dist-tag permission). npm matches the repository name exactly, case included: the trust entry and `package.json` `repository.url` must both say `novacon/ohmyjev`, or publish fails with E404 (trust) or E422 (provenance). No npm token exists anywhere.
 - The package's publishing access is "require 2FA and disallow tokens". If a tagged publish fails with a permissions error, check that setting first.
 - Never also run `npm publish` locally for a version the tag will publish: npm refuses a second publish of the same version (this happened with 0.2.0).
 - npm account `novacon` has 2FA for auth and writes. `ohmyjev@0.0.0-stage` is a deprecated placeholder; leave it.

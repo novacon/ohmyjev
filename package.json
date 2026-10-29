@@ -1,13 +1,13 @@
 {
   "name": "ohmyjev",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://ohmyjev.xyz",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Novacon/ohmyjev.git"
+    "url": "git+https://github.com/novacon/ohmyjev.git"
   },
   "keywords": [
     "pi-package",
