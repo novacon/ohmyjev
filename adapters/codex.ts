@@ -7,17 +7,15 @@
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import {
-  githubCheckpoint, BASH_Q, EXFIL_Q, SCREEN_Q, STOP_Q, WRITE_Q, applyPatchPaths, approveBash, approveWrite, callSummary, clip, clipTail, denyText, gateBash, gateExfil, gateWrite,
+  githubCheckpoint, BASH_Q, EXFIL_Q, SCREEN_Q, STOP_Q, WRITE_Q, applyPatchPaths, callSummary, clip, clipTail, denyText, gateBash, gateExfil, gateWrite,
   judgeStop, pathDenyText, plainRead, readConfig, sanitizeSid, screen, withPolicies, withPolicyQ, type Config,
 } from '../hooks/policy.ts'
 import { Session, keyOf, newStuck, pathAllowed, repoRoot, stuckNote, trimOutput, type Env, type Fetch, type Stuck } from './shared.ts'
 
 const CLIP = 16000
 type Tool = { tool: string; input: string; outcome: 'ok' | 'failed'; output: string }
-type State = { githubSeen: string[]; request: string; previous: string[]; count: number; blockedBefore: string; lastBlocked: string; tools: Tool[]; pushedBackAt: number; approved: string[]; stuck: Stuck }
-const EMPTY: State = { githubSeen: [], request: '', previous: [], count: 0, blockedBefore: '', lastBlocked: '', tools: [], pushedBackAt: -1, approved: [], stuck: { failures: [], askedAt: 0 } }
-/** A call Jev cleared, as PermissionRequest will see it again. */
-const approvalKey = (tool: string, input: Input): string => `${tool}\u0000${str(input, 'command')}`
+type State = { githubSeen: string[]; request: string; previous: string[]; count: number; blockedBefore: string; lastBlocked: string; tools: Tool[]; pushedBackAt: number; stuck: Stuck }
+const EMPTY: State = { githubSeen: [], request: '', previous: [], count: 0, blockedBefore: '', lastBlocked: '', tools: [], pushedBackAt: -1, stuck: { failures: [], askedAt: 0 } }
 type Input = Record<string, unknown>
 const str = (o: Input, k: string): string => (typeof o[k] === 'string' ? (o[k] as string) : '')
 const obj = (v: unknown): Input => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Input) : {})
@@ -84,36 +82,28 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
         return deny(note)
       }
     }
-    if (!c.lockdown && !c.autoApprove) return undefined
-    const approve = async () => {
-      if (!c.autoApprove) return undefined
-      st.approved = [...st.approved, approvalKey(tool, toolInput)].slice(-20)
-      await save(env, sid, st)
-      return undefined
-    }
-    const blocked = async (j: { verdict: unknown; reason: string }, safe = false) => {
-      if (j.verdict === null && safe) return approve()
-      if (j.verdict !== 'deny' || !c.lockdown) return undefined
+    if (!c.lockdown) return undefined
+    const blocked = async (j: { verdict: unknown; reason: string }) => {
+      if (j.verdict !== 'deny') return undefined
       st.lastBlocked = callSummary(tool, toolInput)
       await save(env, sid, st)
       return deny(denyText(j.reason))
     }
     if (tool === 'Bash' && c.bashGate) {
       const command = str(toolInput, 'command')
-      if (plainRead(command, c)) return approve()
+      if (plainRead(command, c)) return undefined
       const state = withPolicies({ command: clip(command, CLIP), cwd, ...(command.length > CLIP ? { truncated: true } : {}) }, c, st.request, st.blockedBefore)
       const d = await x.decide('tool.call', tool, state, withPolicyQ(BASH_Q, c, st.request))
       if (!d) return undefined
       const j = gateBash(d.answers, c)
-      x.record(d, c.lockdown ? j.verdict : null, j.reason)
-      return blocked(j, approveBash(d.answers, c))
+      x.record(d, j.verdict, j.reason)
+      return blocked(j)
     }
     if (tool === 'apply_patch' && c.writeGate) {
       const patch = str(toolInput, 'command')
       const root = await repoRoot(cwd)
       for (const path of applyPatchPaths(patch))
         if (!(await pathAllowed(path, cwd, root, c, env))) {
-          if (!c.lockdown) return undefined
           x.denyByCode(tool, `${path} is outside the repo and allowPaths`)
           return deny(pathDenyText(path))
         }
@@ -121,26 +111,18 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
       const d = await x.decide('tool.call', tool, state, withPolicyQ(WRITE_Q, c, st.request))
       if (!d) return undefined
       const j = gateWrite(d.answers, c)
-      x.record(d, c.lockdown ? j.verdict : null, j.reason)
-      return blocked(j, approveWrite(d.answers, c))
+      x.record(d, j.verdict, j.reason)
+      return blocked(j)
     }
-    if (tool.startsWith('mcp__') && c.lockdown && c.exfilGate) {
+    if (tool.startsWith('mcp__') && c.exfilGate) {
       const state = withPolicies({ tool, input: clip(JSON.stringify(toolInput), 4000) }, c, st.request, st.blockedBefore)
       const d = await x.decide('tool.call', tool, state, withPolicyQ(EXFIL_Q, c, st.request))
       if (!d) return undefined
       const j = gateExfil(d.answers, c)
-      x.record(d, c.lockdown ? j.verdict : null, j.reason)
+      x.record(d, j.verdict, j.reason)
       return blocked(j)
     }
     return undefined
-  }
-
-  if (event === 'PermissionRequest') {
-    const key = approvalKey(tool, toolInput)
-    if (!c.autoApprove || !st.approved.includes(key)) return undefined
-    st.approved = st.approved.filter(k => k !== key)
-    await save(env, sid, st)
-    return { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } }
   }
 
   if (event === 'PostToolUse') {

@@ -35,7 +35,6 @@
       </div>
       <div class="body reveal">
         <div class="grid g5">
-          <div class="feat"><div class="top"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l4 4L19 6"/></svg><span class="kind fast">Faster</span></div><h3>Auto-approve</h3><p>If Jev is sure it's safe, it runs with no prompt. <code>ls</code> and <code>git status</code> skip Jev.</p><p class="cfg">autoApprove</p></div>
           <div class="feat"><div class="top"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h7"/></svg><span class="kind fast">Faster</span></div><h3>Trim long output</h3><p>Cuts long output to what you asked about and names the lines it left out. A 20,000-character log came back as 4,600.</p><p class="cfg">trimContext</p></div>
           <div class="feat"><div class="top"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.5 6H21l-5 4 2 7-6-4-6 4 2-7-5-4h6.5z"/></svg><span class="kind fast">Faster</span></div><h3>Skill picker</h3><p>Drops the skill list from every prompt and loads only the one you need.</p><p class="cfg">trimContext · Claude Code</p></div>
           <div class="feat"><div class="top"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v4h4"/></svg><span class="kind fast">Faster</span></div><h3>Stuck check</h3><p>Same failure three times? The agent is told to try something else.</p><p class="cfg">nudges</p></div>
@@ -64,7 +63,7 @@
     <div class="doc-inner">
       <div class="head reveal">
         <p class="section-label lbl">02 / How it decides <span>One tool call</span></p><h2>how it <em>decides</em></h2>
-        <p class="lede">Every tool call gets one quick check. Normal mode reminds the agent before GitHub changes and can auto-approve safe calls. Blocking gates require <code>lockdown: true</code>, off by default.</p>
+        <p class="lede">Every tool call gets one quick check. Normal mode reminds the agent before GitHub changes. Blocking gates require <code>lockdown: true</code>, off by default.</p>
       </div>
       <div class="body reveal main-first">
         <div class="flow-cols">
@@ -206,7 +205,6 @@ key: env TYPESAFE_API_KEY · typesafe · jev-1.13.0</pre></div>
               <tr><td><code>policies</code></td><td>empty</td><td>Your own rules for lockdown, separated by <code>;</code>.</td></tr>
               <tr><td><code>injectionScreen</code></td><td class="on">on</td><td>Flags tool output, and Reads from outside the repo, that give the model orders.</td></tr>
               <tr><td><code>githubReminders</code></td><td class="on">on</td><td>Asks the agent to review a push or <code>gh</code> change once.</td></tr>
-              <tr><td><code>autoApprove</code></td><td class="on">on</td><td>Skips the prompt for calls Jev rates safe.</td></tr>
               <tr><td><code>nudges</code></td><td class="on">on</td><td>One-time notes on broken writing rules, vague subagent briefs, and repeated failures.</td></tr>
               <tr><td><code>trimContext</code></td><td class="on">on</td><td>Cuts long shell output; loads only the skill you need.</td></tr>
               <tr><td><code>autoCompact</code></td><td class="on">on</td><td>Compacts fast after a task switch.</td></tr>
@@ -247,7 +245,6 @@ claude plugin uninstall ohmyjev@ohmyjev</pre>
             <tbody>
               <tr><td>Bash gate</td><td>Bash</td><td>Bash</td><td><code>bash</code>, <code>eval</code>, GitHub pushes</td><td><code>bash</code>, <code>powershell</code></td></tr>
               <tr><td>Write gate</td><td>Write, Edit, NotebookEdit</td><td><code>apply_patch</code></td><td><code>write</code>, <code>edit</code>, <code>ast_edit</code></td><td><code>write</code>, <code>edit</code></td></tr>
-              <tr><td>Auto-approve</td><td>yes</td><td>yes</td><td>omp doesn't ask</td><td>pi doesn't ask</td></tr>
               <tr><td>Trim, stuck check, done-check</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
               <tr><td>Fast compaction</td><td>yes</td><td>no</td><td>no: omp can only add to the summary</td><td>yes</td></tr>
               <tr><td>Skill picker, subagent checks, writing rules</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
@@ -318,7 +315,7 @@ claude plugin uninstall ohmyjev@ohmyjev</pre>
             <thead><tr><th>Check</th><th>Result</th></tr></thead>
             <tbody>
               <tr><td>Jev cost and speed</td><td>3,877 real calls over 90 sessions: $0.13 in all, median 163 ms, 95th percentile 239 ms.</td></tr>
-              <tr><td>Auto-approve</td><td>637 of 865 real commands (74%). Plus 31% of all commands skip Jev.</td></tr>
+              <tr><td>Plain reads</td><td>31% of 4,888 real commands skip Jev.</td></tr>
               <tr><td>Trim</td><td>A 20,471-character test log to 4,582, the failure kept, in 281 ms.</td></tr>
               <tr><td>Safety gates</td><td>28 of 28, three runs. Was 24 of 28 before the fixes. Still 28 of 28 with secret masking on.</td></tr>
               <tr><td>Fast compaction</td><td>60 messages in 336 ms. All 5 planted items kept (3 constraints, a failing test, an open question), none of the 51 lines of routine output.</td></tr>

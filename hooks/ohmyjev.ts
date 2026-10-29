@@ -12,7 +12,7 @@ import {
   githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
   EMPTY_SESSION, absolute, clip, denyText, expandRoot, gateBash, gateExfil, gateWrite, hostPath, isUnder, judgeStop, normalize, parseWorktrees, pathDenyText, rawAbsolute,
   ASK_DESCRIPTION, ASK_SCHEMA, buildQuestion, builtinRoute, decideRoute, jevRouteLine, keepInstructions, statusText, stepLine, summarize, modelOf, readConfig, routeStep,
-  BROWSE_DESCRIPTION, BROWSE_SCHEMA, BROWSE_TIMEOUT_MS, browseCommand, browseReply, STUCK_Q, BRIEF_Q, maskSecrets, SUBAGENT_DONE_REASON, judgeBrief, fitsQuestion, pickSkill, skillFits, skillNote, skillQuestions, trimChunks, trimRequest, trimmed, approveBash, approveWrite, failureOf, judgeStuck, stuckDue, stuckState, type Failure, callSummary, clipTail, configCommand, plainRead, sanitizeSid, screen, splitList, withPolicies, withPolicyQ, TIER_LABELS, DASHBOARD, OMJ_HELP, OMJ_OFF, OMJ_ON, parseLog, toggleArg,
+  BROWSE_DESCRIPTION, BROWSE_SCHEMA, BROWSE_TIMEOUT_MS, browseCommand, browseReply, STUCK_Q, BRIEF_Q, maskSecrets, SUBAGENT_DONE_REASON, judgeBrief, fitsQuestion, pickSkill, skillFits, skillNote, skillQuestions, trimChunks, trimRequest, trimmed, failureOf, judgeStuck, stuckDue, stuckState, type Failure, callSummary, clipTail, configCommand, plainRead, sanitizeSid, screen, splitList, withPolicies, withPolicyQ, TIER_LABELS, DASHBOARD, OMJ_HELP, OMJ_OFF, OMJ_ON, parseLog, toggleArg,
   type Config, type Judged, type LogEntry, type Route, type Questions, type SessionState, type Verdict,
 } from './policy.ts'
 
@@ -156,8 +156,6 @@ let ctx: Ctx | undefined
 let pushedBackAt = -1 // request count when the done-check last pushed back: once per request
 let route: Route | undefined // this turn's classification; undefined routes nothing
 let lastBlocked = '' // the call a gate denied this turn
-const approved = new Set<string>() // calls Jev cleared as safe: the permission check may skip asking the person
-const approvalKey = (kind: string, input: unknown): string => `${kind}\u0000${arg(input, 'command') || arg(input, 'file_path') || arg(input, 'notebook_path') || arg(input, 'path')}`
 let blockedBefore = '' // what was denied in the turn before this request: a "yes" confirms it
 let proseRules: Rule[] | 'pending' | 'none' = 'none' // the instruction files' writing rules, once extracted
 let proseAt = -1 // request count when the writing-rule check last asked for a rewrite: once per request
@@ -271,28 +269,23 @@ function blocked(j: Judged, tool: string, input: unknown): string | undefined {
 }
 
 async function gate($: $, e: { tool: string }): Promise<string | undefined> {
-  if (!c.lockdown && !c.autoApprove) return undefined
+  if (!c.lockdown) return undefined
   const tool = String(e.tool)
   const kind = kindOf(tool)
   const cwd = await $.session.cwd()
   if (kind === 'Bash' && c.bashGate) {
     const command = arg(e, 'command')
-    if (plainRead(command, c)) {
-      if (c.autoApprove) approved.add(approvalKey(kind, e)) // ls, git status, grep: code says read-only, no Jev call
-      return undefined
-    }
+    if (plainRead(command, c)) return undefined // ls, git status, grep: code says read-only, no Jev call
     const state = { command: clip(command, CLIP), cwd, description: clip(arg(e, 'description'), 300), ...(command.length > CLIP ? { truncated: true } : {}) }
     const d = await decide($, 'tool.call', tool, withPolicies(state, c, userRequest, blockedBefore), withPolicyQ(BASH_Q, c, userRequest))
     if (!d) return undefined
     const j = gateBash(d.answers, c)
-    record($, d, c.lockdown ? j.verdict : null, j.reason)
-    if (j.verdict === null && approveBash(d.answers, c)) approved.add(approvalKey(kind, e))
-    return c.lockdown ? blocked(j, tool, e) : undefined
+    record($, d, j.verdict, j.reason)
+    return blocked(j, tool, e)
   }
   if (WRITE_TOOLS.includes(kind) && c.writeGate) {
     const path = pathOf(e)
     if (path === null || !(await pathAllowed($, path, cwd))) {
-      if (!c.lockdown) return undefined
       const shown = path ?? arg(e, 'path')
       const x = await session($)
       x.s.denies++
@@ -305,18 +298,17 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
     const d = await decide($, 'tool.call', tool, withPolicies({ path, content: clip(content, CLIP) }, c, userRequest, blockedBefore), withPolicyQ(WRITE_Q, c, userRequest))
     if (!d) return undefined
     const j = gateWrite(d.answers, c)
-    record($, d, c.lockdown ? j.verdict : null, j.reason)
-    if (j.verdict === null && approveWrite(d.answers, c)) approved.add(approvalKey(kind, e))
-    return c.lockdown ? blocked(j, tool, e) : undefined
+    record($, d, j.verdict, j.reason)
+    return blocked(j, tool, e)
   }
-  if ((kind === 'WebFetch' || kind.startsWith('mcp__')) && c.lockdown && c.exfilGate) {
+  if ((kind === 'WebFetch' || kind.startsWith('mcp__')) && c.exfilGate) {
     const { tool: _t, tool_use_id: _id, consent: _c, ...input } = e as Record<string, unknown>
     const state = withPolicies({ tool, input: clip(JSON.stringify(input), 4000) }, c, userRequest, blockedBefore)
     const d = await decide($, 'tool.call', tool, state, withPolicyQ(EXFIL_Q, c, userRequest))
     if (!d) return undefined
     const j = gateExfil(d.answers, c)
-    record($, d, c.lockdown ? j.verdict : null, j.reason)
-    return c.lockdown ? blocked(j, tool, e) : undefined
+    record($, d, j.verdict, j.reason)
+    return blocked(j, tool, e)
   }
   return undefined
 }
@@ -655,7 +647,6 @@ export const register: Register = (on, options) => {
   pushedBackAt = -1
   route = undefined
   liveRequest = ''
-  approved.clear()
   proseRules = 'none'
   proseAt = -1
   briefs.clear()
@@ -778,17 +769,6 @@ export const register: Register = (on, options) => {
     return next({ ...e, context: [...(e.context ?? []), skillNote(pick.name)] })
   }).catch(($, e, next) => next(e))
 
-  /** Auto-approve: where the engine would stop to ask the person, a call Jev already cleared runs instead. */
-  on('tool.check', async ($, e, next) => {
-    const r = await next(e)
-    if (r.decision !== 'ask' || r.ceiling === 'ask' || !c.enabled || !c.autoApprove) return r
-    const key = approvalKey(kindOf(e.tool), e.input)
-    if (!approved.has(key)) return r
-    approved.delete(key)
-    say($, `approved ${e.tool}: Jev rated it safe, so no prompt`)
-    return { decision: 'allow', reason: 'ohmyjev: Jev rated this call safe' }
-  }).catch(($, e, next) => next(e))
-
   for (const command of ['omj', 'ohmyjev'])
     on('command.run', { command }, async ($, e) => ({ text: await runCommand($, e.args) })).catch(($, e, next) => next(e))
 
@@ -883,8 +863,7 @@ export const register: Register = (on, options) => {
     pushedBackAt = -1
     route = undefined
     liveRequest = ''
-    approved.clear()
-    proseRules = 'none'
+      proseRules = 'none'
     proseAt = -1
     briefs.clear()
     briefsSentBack.clear()

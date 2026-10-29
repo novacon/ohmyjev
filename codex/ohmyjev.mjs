@@ -10,7 +10,6 @@ var SETTINGS = {
   policies: "",
   injectionScreen: true,
   githubReminders: true,
-  autoApprove: true,
   nudges: true,
   trimContext: true,
   autoCompact: true,
@@ -56,8 +55,6 @@ var DEFAULTS = {
   trimOver: 12000,
   trimKeep: 0.3,
   stuck: 0.7,
-  approveConfidence: 0.9,
-  approveRiskMax: 0.2,
   maskSecrets: true,
   readNarrow: false,
   compactSwitched: 0.8,
@@ -336,14 +333,6 @@ function gateBash(a, c) {
   if (out >= c.exfil)
     return unlessRequested({ verdict: "deny", reason: `sends local data out (${f2(out)}): keep local files and credentials local` }, a, c);
   return { verdict: null, reason: `${effect.choice} (${f2(effect.confidence)}), destructive ${f2(destructive)}, exfil ${f2(out)}` };
-}
-function approveBash(a, c) {
-  const effect = ch(a, "effect");
-  return c.autoApprove && !splitList(c.policies).length && effect.choice !== "irreversible" && effect.confidence >= c.approveConfidence && nv(a, "destructive_intent") < c.approveRiskMax && nv(a, "exfiltrates") < c.approveRiskMax;
-}
-function approveWrite(a, c) {
-  const kind = ch(a, "kind");
-  return c.autoApprove && !splitList(c.policies).length && nv(a, "contains_secret") < c.approveRiskMax && kind.choice !== "secrets";
 }
 function gateWrite(a, c) {
   const kind = ch(a, "kind");
@@ -1077,8 +1066,7 @@ async function trimOutput(x, request, output, command) {
 
 // adapters/codex.ts
 var CLIP = 16000;
-var EMPTY = { githubSeen: [], request: "", previous: [], count: 0, blockedBefore: "", lastBlocked: "", tools: [], pushedBackAt: -1, approved: [], stuck: { failures: [], askedAt: 0 } };
-var approvalKey = (tool, input) => `${tool}\x00${str(input, "command")}`;
+var EMPTY = { githubSeen: [], request: "", previous: [], count: 0, blockedBefore: "", lastBlocked: "", tools: [], pushedBackAt: -1, stuck: { failures: [], askedAt: 0 } };
 var str = (o, k) => typeof o[k] === "string" ? o[k] : "";
 var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 async function config(env) {
@@ -1140,19 +1128,10 @@ async function handle(input, env, fetchImpl) {
         return deny(note);
       }
     }
-    if (!c.lockdown && !c.autoApprove)
+    if (!c.lockdown)
       return;
-    const approve = async () => {
-      if (!c.autoApprove)
-        return;
-      st.approved = [...st.approved, approvalKey(tool, toolInput)].slice(-20);
-      await save(env, sid, st);
-      return;
-    };
-    const blocked = async (j, safe = false) => {
-      if (j.verdict === null && safe)
-        return approve();
-      if (j.verdict !== "deny" || !c.lockdown)
+    const blocked = async (j) => {
+      if (j.verdict !== "deny")
         return;
       st.lastBlocked = callSummary(tool, toolInput);
       await save(env, sid, st);
@@ -1161,22 +1140,20 @@ async function handle(input, env, fetchImpl) {
     if (tool === "Bash" && c.bashGate) {
       const command = str(toolInput, "command");
       if (plainRead(command, c))
-        return approve();
+        return;
       const state = withPolicies({ command: clip(command, CLIP), cwd, ...command.length > CLIP ? { truncated: true } : {} }, c, st.request, st.blockedBefore);
       const d = await x.decide("tool.call", tool, state, withPolicyQ(BASH_Q, c, st.request));
       if (!d)
         return;
       const j = gateBash(d.answers, c);
-      x.record(d, c.lockdown ? j.verdict : null, j.reason);
-      return blocked(j, approveBash(d.answers, c));
+      x.record(d, j.verdict, j.reason);
+      return blocked(j);
     }
     if (tool === "apply_patch" && c.writeGate) {
       const patch = str(toolInput, "command");
       const root = await repoRoot(cwd);
       for (const path of applyPatchPaths(patch))
         if (!await pathAllowed(path, cwd, root, c, env)) {
-          if (!c.lockdown)
-            return;
           x.denyByCode(tool, `${path} is outside the repo and allowPaths`);
           return deny(pathDenyText(path));
         }
@@ -1185,27 +1162,19 @@ async function handle(input, env, fetchImpl) {
       if (!d)
         return;
       const j = gateWrite(d.answers, c);
-      x.record(d, c.lockdown ? j.verdict : null, j.reason);
-      return blocked(j, approveWrite(d.answers, c));
+      x.record(d, j.verdict, j.reason);
+      return blocked(j);
     }
-    if (tool.startsWith("mcp__") && c.lockdown && c.exfilGate) {
+    if (tool.startsWith("mcp__") && c.exfilGate) {
       const state = withPolicies({ tool, input: clip(JSON.stringify(toolInput), 4000) }, c, st.request, st.blockedBefore);
       const d = await x.decide("tool.call", tool, state, withPolicyQ(EXFIL_Q, c, st.request));
       if (!d)
         return;
       const j = gateExfil(d.answers, c);
-      x.record(d, c.lockdown ? j.verdict : null, j.reason);
+      x.record(d, j.verdict, j.reason);
       return blocked(j);
     }
     return;
-  }
-  if (event === "PermissionRequest") {
-    const key = approvalKey(tool, toolInput);
-    if (!c.autoApprove || !st.approved.includes(key))
-      return;
-    st.approved = st.approved.filter((k) => k !== key);
-    await save(env, sid, st);
-    return { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
   }
   if (event === "PostToolUse") {
     const response = input.tool_response;

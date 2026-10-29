@@ -86,7 +86,6 @@ Set `lockdown` back to `false` to return to normal mode.
 
 | | |
 |---|---|
-| **Auto-approve** | When Claude Code or Codex would ask you, a command Jev is sure is safe just runs, and so does an edit in the repo with no key in it. `ls`, `git status`, and `grep` skip Jev entirely. Off while you have `policies` set. |
 | **Fast compaction** | Jev keeps the messages that still matter (your constraints, decisions, exact errors, and open work) word for word, instead of a model writing a summary. 60 messages took 336 ms with every planted constraint kept. Falls back to the normal summary if anything goes wrong. |
 | **Trim long output** | Shell output over 12,000 characters is cut to the parts your request needs, with a note naming the lines it left out. A 20,000-character test log came back as 4,600, failure included. File reads like `cat` and `sed -n` are never cut. |
 | **Skill picker** | Claude Code sends a line for every skill on every prompt. ohmyjev drops that list and loads only the one skill you need, or none. |
@@ -200,7 +199,6 @@ Claude Code copy stands down for the session: it sees pi's `OHMYJEV_PI`, registe
 |---|---|---|---|---|
 | Gates, say yes, injection screen | yes | yes | yes | yes |
 | Done-check, stuck check, trim | yes | yes | yes | yes |
-| Auto-approve | yes | yes | omp doesn't ask | pi doesn't ask |
 | Fast compaction | yes | no | no | yes |
 | Router | yes | no | yes | yes |
 | Skill picker, subagent checks, writing rules, read narrowing | yes | no | no | no |
@@ -311,7 +309,6 @@ host's settings file. Each setting turns a whole feature on or off; thresholds, 
 | `policies` | empty | Your own rules for lockdown, separated by `;`. |
 | `injectionScreen` | on | Flags tool output, and files read from outside the repo, that give the model orders. |
 | `githubReminders` | on | Reminds the agent once before a push or a `gh` change. |
-| `autoApprove` | on | Skips the host's prompt for calls Jev rates safe. |
 | `nudges` | on | One-time notes: a reply that breaks your `CLAUDE.md` writing rules, a vague subagent brief, an agent stuck on one approach. |
 | `trimContext` | on | Cuts long shell output, and loads only the skill a request needs. |
 | `autoCompact` | on | Compacts fast when the task changes, keeping what still matters. |
@@ -322,8 +319,8 @@ host's settings file. Each setting turns a whole feature on or off; thresholds, 
 
 ## Privacy
 
-GitHub reminders run locally and make no Jev calls. With lockdown off, enabled auto-approval may still judge commands
-and in-repo edits, but those judgments cannot deny them. Other enabled output and quality checks keep their own settings.
+GitHub reminders run locally and make no Jev calls. With lockdown off, commands and edits are never sent to Jev.
+Other enabled output and quality checks keep their own settings.
 
 Each check sends Jev only what it needs, cut to size, with secrets masked first. With no key, nothing goes.
 

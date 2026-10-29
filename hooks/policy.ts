@@ -14,7 +14,6 @@ export const SETTINGS = {
   policies: '',
   injectionScreen: true,
   githubReminders: true,
-  autoApprove: true,
   nudges: true,
   trimContext: true,
   autoCompact: true,
@@ -25,7 +24,7 @@ export const SETTINGS = {
 }
 export const SECTIONS = {
   jev: ['enabled', 'apiKey'],
-  safety: ['lockdown', 'allowPaths', 'policies', 'injectionScreen', 'githubReminders', 'autoApprove'],
+  safety: ['lockdown', 'allowPaths', 'policies', 'injectionScreen', 'githubReminders'],
   helpers: ['nudges', 'trimContext', 'autoCompact', 'routing', 'jevTools', 'browse', 'statusLine'],
 } as const satisfies Record<string, readonly (keyof typeof SETTINGS)[]>
 export const ROUTING = ['off', 'effort', 'model'] as const
@@ -70,8 +69,6 @@ export const DEFAULTS = {
   trimOver: 12000,
   trimKeep: 0.3,
   stuck: 0.7,
-  approveConfidence: 0.9,
-  approveRiskMax: 0.2,
   maskSecrets: true,
   readNarrow: false,
   compactSwitched: 0.8,
@@ -403,21 +400,6 @@ export function gateBash(a: Answers, c: Config): Judged {
   const out = nv(a, 'exfiltrates')
   if (out >= c.exfil) return unlessRequested({ verdict: 'deny', reason: `sends local data out (${f2(out)}): keep local files and credentials local` }, a, c)
   return { verdict: null, reason: `${effect.choice} (${f2(effect.confidence)}), destructive ${f2(destructive)}, exfil ${f2(out)}` }
-}
-
-/**
- * Whether the host may skip asking the person: Jev is sure the command only reads or makes a change git or a reinstall
- * undoes, and sees no wipe and no data leaving. Policies make every call worth a look, so nothing is approved then.
- */
-export function approveBash(a: Answers, c: Config): boolean {
-  const effect = ch(a, 'effect')
-  return c.autoApprove && !splitList(c.policies).length && effect.choice !== 'irreversible' && effect.confidence >= c.approveConfidence &&
-    nv(a, 'destructive_intent') < c.approveRiskMax && nv(a, 'exfiltrates') < c.approveRiskMax
-}
-/** The same for an edit inside the repo: no credential in it, not a secrets file. */
-export function approveWrite(a: Answers, c: Config): boolean {
-  const kind = ch(a, 'kind')
-  return c.autoApprove && !splitList(c.policies).length && nv(a, 'contains_secret') < c.approveRiskMax && kind.choice !== 'secrets'
 }
 
 export function gateWrite(a: Answers, c: Config): Judged {

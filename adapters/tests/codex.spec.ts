@@ -72,15 +72,6 @@ test.skipIf(Bun.version !== pinned)('codex/ohmyjev.mjs is built from the current
   expect(await readFile('codex/ohmyjev.mjs', 'utf8')).toBe(await readFile(out, 'utf8'))
 })
 
-test('Codex: a command Jev cleared is approved once at PermissionRequest', async () => {
-  answers = { effect: { type: 'choice', choice: 'reversible', confidence: 0.97 }, destructive_intent: n(0.02), exfiltrates: n(0.01), requested: n(0) }
-  const call = { tool_name: 'Bash', tool_input: { command: 'npm test' } }
-  expect(await ev({ hook_event_name: 'PreToolUse', ...call })).toBe(undefined)
-  expect(await ev({ hook_event_name: 'PermissionRequest', ...call })).toMatchObject({ hookSpecificOutput: { decision: { behavior: 'allow' } } })
-  expect(await ev({ hook_event_name: 'PermissionRequest', ...call })).toBe(undefined)
-  expect(await ev({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'rm -rf x' } })).toBe(undefined)
-})
-
 test('Codex: three failures that repeat one approach get a change-approach note', async () => {
   await ev({ hook_event_name: 'UserPromptSubmit', prompt: 'fix the build' })
   answers = { stuck: n(0.9), injection: n(0) }

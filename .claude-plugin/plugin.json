@@ -1,6 +1,6 @@
 {
   "name": "ohmyjev",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "author": {
     "name": "lordknows13"
@@ -54,12 +54,6 @@
       "type": "boolean",
       "title": "GitHub reminders",
       "description": "Ask the agent to double-check once before a push or a gh change; retrying goes through, no prompt for you",
-      "default": true
-    },
-    "autoApprove": {
-      "type": "boolean",
-      "title": "Auto-approve",
-      "description": "Where the host would stop to ask you, run a command or in-repo edit Jev rates safe instead",
       "default": true
     },
     "nudges": {

@@ -24,11 +24,11 @@ Installed as a Claude Code plugin, a Codex plugin, and a pi/omp extension (npm `
 
 ## Capabilities and Constraints
 
-Faster: auto-approve, plain-read fast path, output trim, skill picker (Claude Code only), stuck check, model router, auto-compact, `browse` (jev-ultrafast, off by default).
+Faster: plain-read fast path, output trim, skill picker (Claude Code only), stuck check, model router, auto-compact, `browse` (jev-ultrafast, off by default).
 Normal mode: GitHub reminders, injection screen and the speed features.
 Opt-in lockdown: bash gate, write gate, exfil gate, policies, request-aware unblock ("say yes"), done-check. Lockdown defaults off.
 Tools: `ask_jev`, `/omj`, `/omj config`, `/omj stats`, `/omj on|off`.
-Codex hooks can't add tools or commands; pi and omp never ask permission, so auto-approve has nothing to answer there.
+Codex hooks can't add tools or commands.
 
 ## Brand Commitments
 
@@ -38,7 +38,7 @@ Name `ohmyjev` (lowercase). Logo: script "ohmy" in white with block "jev" in pur
 
 All measured on the owner's Mac, 2026-10-10/11:
 - Google Flights one-way Zurich to London, Claude Code end to end, 3 runs each, all correct (medians): default Opus 5.5 xhigh + Playwright 108 s, $0.23-0.42; router picking Haiku + Playwright 44 s, ~$0.01; router + `browse` 18 s, ~$0.002; `browse` called directly 10 s.
-- Auto-approve: 637 of 865 Jev-judged shell commands in real logs (74%) clear its bar; plain reads (31% of 4,888 real commands) skip Jev entirely.
+- Plain reads (31% of 4,888 real commands) skip Jev entirely.
 - Jev cost and speed: 3,877 real calls over 90 sessions, $0.13 total ($0.000034 each), median 163 ms, p95 239 ms.
 - Trim: a 20,471-character test log to 4,582 with the failure kept, 281 ms.
 - Gates: 28 of 28 live cases (`tests/live.ts`), three times.
