@@ -2,18 +2,45 @@
 import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2 } from "node:fs/promises";
 
 // hooks/policy.ts
-var DEFAULTS = {
-  apiKey: "",
-  jevModel: "jev-1.13.0",
+var SETTINGS = {
   enabled: true,
+  apiKey: "",
   lockdown: false,
+  allowPaths: "~/.claude;$TMPDIR;/tmp",
+  policies: "",
+  injectionScreen: true,
   githubReminders: true,
+  autoApprove: true,
+  nudges: true,
+  trimContext: true,
+  autoCompact: true,
+  routing: "effort",
+  jevTools: true,
+  browse: false,
+  statusLine: true
+};
+var expand = (s) => ({
+  screenReads: s.injectionScreen,
+  proseCheck: s.nudges,
+  subagentCheck: s.nudges,
+  stuckCheck: s.nudges,
+  trimOutput: s.trimContext,
+  skillPick: s.trimContext,
+  fastCompact: s.autoCompact,
+  routeEffort: s.routing !== "off",
+  routeSubagents: s.routing !== "off",
+  routeMainModel: s.routing === "model",
+  askJev: s.jevTools,
+  findCode: s.jevTools,
+  logDecisions: s.statusLine
+});
+var DEFAULTS = {
+  ...SETTINGS,
+  jevModel: "jev-1.13.0",
   bashGate: true,
   writeGate: true,
-  injectionScreen: true,
   doneCheck: true,
   exfilGate: true,
-  screenReads: true,
   bashIrreversible: 0.6,
   bashDestructive: 0.7,
   writeSecret: 0.7,
@@ -24,32 +51,18 @@ var DEFAULTS = {
   doneAsksUserMax: 0.5,
   exfil: 0.7,
   requested: 0.8,
-  autoApprove: true,
-  stuckCheck: true,
-  skillPick: true,
   skillGate: 0.3,
   skillMin: 0.4,
-  trimOutput: true,
   trimOver: 12000,
   trimKeep: 0.3,
   stuck: 0.7,
   approveConfidence: 0.9,
   approveRiskMax: 0.2,
-  askJev: true,
-  browse: false,
-  findCode: true,
-  fastCompact: true,
-  subagentCheck: true,
-  proseCheck: true,
   maskSecrets: true,
   readNarrow: false,
-  autoCompact: true,
   compactSwitched: 0.8,
   compactBoundary: 0.6,
   compactMinPercent: 40,
-  routeEffort: true,
-  routeSubagents: true,
-  routeMainModel: false,
   routeUpgrade: 0.3,
   routeDowngrade: 0.6,
   routeRisky: 0.7,
@@ -57,13 +70,13 @@ var DEFAULTS = {
   fastModel: "claude-haiku-5-5",
   balancedModel: "claude-sonnet-5-5",
   deepModel: "claude-opus-5-5",
-  allowPaths: "~/.claude;$TMPDIR;/tmp",
-  policies: "",
   timeoutMs: 1500,
-  logDecisions: true,
-  statusLine: true
+  ...expand(SETTINGS)
 };
-var readConfig = (options) => ({ ...DEFAULTS, ...options });
+var readConfig = (options) => {
+  const set = { ...DEFAULTS, ...options };
+  return { ...set, ...expand(set), ...options };
+};
 var splitList = (s) => s.split(";").map((x) => x.trim()).filter(Boolean);
 function githubMutation(tool, input) {
   const command = typeof input.command === "string" ? input.command : "";

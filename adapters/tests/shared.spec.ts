@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { DEFAULTS, githubCheckpoint, githubMutation, BASH_Q, readConfig } from '../../hooks/policy.ts'
+import { SETTINGS, githubCheckpoint, githubMutation, BASH_Q, readConfig } from '../../hooks/policy.ts'
 import { Session, answerAsk, pathAllowed, runBrowse, type Fetch } from '../shared.ts'
 
 let base = ''
@@ -161,8 +161,8 @@ test('GitHub reminders distinguish writes from common reads and command argument
 test('published schemas match shared defaults, including lockdown and reminders', async () => {
   const plugin = JSON.parse(await readFile('.claude-plugin/plugin.json', 'utf8'))
   const pkg = JSON.parse(await readFile('package.json', 'utf8'))
-  for (const [key, value] of Object.entries(DEFAULTS)) {
+  for (const [key, value] of Object.entries(SETTINGS)) {
     expect(plugin.userConfig[key]?.default).toEqual(value)
-    if (!['fastModel', 'balancedModel', 'deepModel'].includes(key)) expect(pkg.omp.settings[key]?.default).toEqual(value)
+    expect(pkg.omp.settings[key]?.default).toEqual(value)
   }
 })

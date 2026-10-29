@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { DEFAULTS, DONE_REASON, type Answers } from '../../hooks/policy.ts'
+import { SETTINGS, DONE_REASON, type Answers } from '../../hooks/policy.ts'
 import {
   createExtension,
   type HostContext,
@@ -398,12 +398,9 @@ test('ask_jev, /omj and /ohmyjev use host-native registration and display-only U
   expect(ctx.notifications.at(-1)).toContain('calls 0')
 })
 
-test('OMP settings schema covers every policy key and uses native role aliases', async () => {
+test('OMP settings schema covers every setting and keeps the key secret', async () => {
   const pkg = JSON.parse(await readFile('package.json', 'utf8')) as { omp: { settings: Record<string, { default: unknown; env?: string; secret?: boolean }> } }
-  expect(Object.keys(pkg.omp.settings).sort()).toEqual(Object.keys(DEFAULTS).sort())
-  expect(pkg.omp.settings.fastModel?.default).toBe('@smol')
-  expect(pkg.omp.settings.balancedModel?.default).toBe('@default')
-  expect(pkg.omp.settings.deepModel?.default).toBe('@slow')
+  expect(Object.keys(pkg.omp.settings)).toEqual(Object.keys(SETTINGS))
   expect(pkg.omp.settings.apiKey).toMatchObject({ secret: true, env: 'TYPESAFE_API_KEY' })
 })
 

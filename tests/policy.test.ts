@@ -186,20 +186,18 @@ test('plain reads skip Jev; anything that could write or run more does not', () 
 test('/omj config lists, changes one setting for the session, and never takes the key', () => {
   const p = 'persist hint'
   const overview = configCommand(c, '', p).text
-  expect(overview).toContain('gates       lockdown: off · githubReminders: on · bashGate: on · writeGate: on')
-  expect(overview).not.toContain('bashIrreversible') // thresholds live one level down
-  const gates = configCommand(c, 'gates', p).text
-  expect(gates).toContain('  bashIrreversible: 0.6')
-  expect(gates).not.toContain('routeEffort')
-  expect(configCommand(c, 'bashGate off', p).c.bashGate).toBe(false)
-  expect(configCommand(c, 'bashGate off', p).text).toContain('bashGate: off * for this session')
-  expect(configCommand(c, 'requested 0.9', p).c.requested).toBe(0.9)
-  expect(configCommand(configCommand(c, 'requested 0.9', p).c, 'gates', p).text).toContain('requested: 0.9 *')
-  expect(configCommand(c, 'nope', p).text).toContain('lists the sections (jev, gates')
+  expect(overview).toContain('safety:\n  lockdown: off\n  allowPaths:')
+  expect(overview).toContain('  routing: effort')
+  expect(overview).not.toContain('bashIrreversible') // tuning is not a setting
+  expect(configCommand(c, 'nudges off', p).c.proseCheck).toBe(false) // a setting turns the switches beneath it
+  expect(configCommand(c, 'nudges off', p).text).toContain('nudges: off * for this session')
+  const model = configCommand(c, 'routing model', p).c
+  expect([model.routeEffort, model.routeMainModel]).toEqual([true, true])
+  expect(configCommand(c, 'routing off', p).c.routeSubagents).toBe(false)
+  expect(configCommand(c, 'routing fast', p).text).toContain('off, effort, model')
   expect(configCommand(c, 'policies never touch prod; no Friday deploys', p).c.policies).toBe('never touch prod; no Friday deploys')
-  expect(configCommand(c, 'bashGate maybe', p).text).toContain('on or off')
-  expect(configCommand(c, 'timeoutMs fast', p).text).toContain('a number')
-  expect(configCommand(c, 'nope 1', p).text).toContain('no setting named nope')
+  expect(configCommand(c, 'lockdown maybe', p).text).toContain('on or off')
+  expect(configCommand(c, 'bashGate off', p).text).toContain('no setting named bashGate')
   const k = configCommand(c, 'apiKey ts-secret', p)
   expect(k.c.apiKey).toBe(c.apiKey)
   expect(k.text).not.toContain('ts-secret')

@@ -77,7 +77,7 @@ For the current session, run `/omj config lockdown on`. To keep it enabled in Cl
 omp plugin config set ohmyjev lockdown true
 ```
 
-For Codex, add `"lockdown": true` to `~/.codex/ohmyjev.json`. For pi, set `"lockdown": true` under `ohmyjev` in your settings. Each gate's own toggle and thresholds still apply.
+For Codex, add `"lockdown": true` to `~/.codex/ohmyjev.json`. For pi, set `"lockdown": true` under `ohmyjev` in your settings.
 Set `lockdown` back to `false` to return to normal mode.
 
 ## What you get
@@ -91,7 +91,7 @@ Set `lockdown` back to `false` to return to normal mode.
 | **Trim long output** | Shell output over 12,000 characters is cut to the parts your request needs, with a note naming the lines it left out. A 20,000-character test log came back as 4,600, failure included. File reads like `cat` and `sed -n` are never cut. |
 | **Skill picker** | Claude Code sends a line for every skill on every prompt. ohmyjev drops that list and loads only the one skill you need, or none. |
 | **Stuck check** | Same failure three times? The agent is told to stop, read the error, and try something else. |
-| **Router** | Picks effort and the subagent model for each request. With `routeMainModel` on it picks the main model too: it sent a flight search to Haiku, 108 s down to 44 s. |
+| **Router** | Picks effort and the subagent model for each request. With `routing` set to `model` it picks the main model too: it sent a flight search to Haiku, 108 s down to 44 s. |
 | **Auto-compact** | New task and the context is 40% full? It compacts and keeps your new request. |
 | **Narrow big reads** | Off by default. A `Read` of a 400+ line file comes back as the fifth you asked about, with a note on how to see the rest. |
 
@@ -173,7 +173,7 @@ router, `/omj`, `ask_jev`, or `browse` there. Settings go in `~/.codex/ohmyjev.j
 
 ```bash
 omp plugin install ohmyjev
-omp plugin config set ohmyjev routeMainModel true     # settings
+omp plugin config set ohmyjev routing model     # settings
 ```
 
 Restart the session after installing. The router uses omp's `@smol`, `@default`, and `@slow` roles.
@@ -187,7 +187,7 @@ pi install npm:ohmyjev
 Settings go under `ohmyjev` in `~/.pi/agent/settings.json`, or `.pi/settings.json` for one project:
 
 ```json
-{ "ohmyjev": { "routeMainModel": true, "fastModel": "anthropic/claude-haiku-5-5" } }
+{ "ohmyjev": { "routing": "model", "lockdown": true } }
 ```
 
 Running Claude Code inside pi through pi-claude-bridge? pi runs every tool, so pi's copy of ohmyjev checks them and the
@@ -273,9 +273,7 @@ denies: Bash 1
 key: env TYPESAFE_API_KEY · typesafe · jev-1.13.0
 ```
 
-`/omj config` shows the settings by section, one line each: `jev`, `gates`, `checks`, `speed`, `compaction`, `router`,
-`tools`, and `display`. `/omj config gates` opens one, thresholds included, and `/omj config <name> <value>` changes
-one for the session. A `*` marks a value that differs from the default. `/omj stats` opens a dashboard of every session
+`/omj config` lists the settings, and `/omj config <name> <value>` changes one for the session. A `*` marks a value that differs from the default. `/omj stats` opens a dashboard of every session
 at `~/.ohmyjev/dashboard.html`. `/omj off` turns everything off for the session.
 
 ### Your own rules
@@ -300,41 +298,27 @@ To put it in your own statusline script, copy `jev_segment()` from
 
 ## Settings
 
-`/omj config` shows the settings by section, and `/omj config <section>` lists one. Change any setting for the session
-with `/omj config <name> <value>`. To keep it, use `/plugin configure ohmyjev@ohmyjev` then `/reload-plugins` in Claude
-Code, `omp plugin config set` in omp, or each host's settings file. The host dialogs list the settings in the same order:
-switches first, thresholds after, section by section.
+`/omj config` lists the settings, and `/omj config <name> <value>` changes one for the session. To keep a change, use
+`/plugin configure ohmyjev@ohmyjev` then `/reload-plugins` in Claude Code, `omp plugin config set` in omp, or each
+host's settings file. Each setting turns a whole feature on or off; thresholds, models and timeouts are fixed.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `lockdown` | off | Enables blocking bash, write, exfiltration and done-check gates. |
-| `githubReminders` | on | In normal mode, reminds the agent once per distinct GitHub change. Set off to disable. |
 | `enabled` | on | Everything. `/omj on` and `off` for one session. |
-| `autoApprove` | on | Skips the prompt for safe calls. `approveConfidence` (0.9), `approveRiskMax` (0.2). |
-| `fastCompact` | on | Jev keeps the messages that matter instead of a model summary. |
-| `trimOutput` | on | Cuts long shell output. `trimOver` (12000), `trimKeep` (0.3). |
-| `skillPick` | on | Loads only the skill you need. `skillGate` (0.3), `skillMin` (0.4). |
-| `stuckCheck` | on | Catches the agent repeating a failure. `stuck` (0.7). |
-| `routeEffort`, `routeSubagents` | on | Lets the router set effort and the subagent model. |
-| `routeMainModel` | off | Also switches the main model, which drops the prompt cache. |
-| `routeWithoutKey` | on | With no key, the host's own classifier routes, up only. |
-| `autoCompact` | on | Compacts on a new task once the context is `compactMinPercent` (40) full. |
-| `readNarrow` | off | Cuts a big `Read` to the part you asked about. |
-| `bashGate`, `writeGate`, `exfilGate` | on in lockdown | Each gate. |
-| `requested` | 0.8 | How sure Jev must be that you asked for a blocked call. |
-| `policies` | empty | Rules for enabled lockdown gates, separated by `;`. |
+| `apiKey` | empty | Your TypeSafe key. Empty uses `$TYPESAFE_API_KEY`, then `$OPENROUTER_API_KEY`. |
+| `lockdown` | off | Blocks irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and an unverified "done". |
 | `allowPaths` | `~/.claude;$TMPDIR;/tmp` | In lockdown, places outside the repo it can write to. |
-| `injectionScreen`, `screenReads` | on | Flags output that gives the model orders. |
-| `doneCheck` | on in lockdown | Pushes back once on an unchecked "done". |
-| `subagentCheck` | on | Checks vague subagent briefs and subagent results. |
-| `proseCheck` | on | Checks replies against the writing rules in `CLAUDE.md` and `AGENTS.md`. |
-| `maskSecrets` | on | Masks secrets before anything goes to Jev. |
-| `askJev`, `findCode` | on | The `ask_jev` and `find_code` tools. |
-| `browse` | off | The `browse` tool. Needs uv. |
-| `fastModel`, `balancedModel`, `deepModel` | `claude-{haiku,sonnet,opus}-5-5` | The model for each router tier. |
-| `jevModel` | `jev-1.13.0` | The Jev model. |
-| `timeoutMs` | 1500 | How long to wait for Jev before letting a call through. |
-| `logDecisions`, `statusLine` | on | Decision lines in the transcript, and the status under the prompt. |
+| `policies` | empty | Your own rules for lockdown, separated by `;`. |
+| `injectionScreen` | on | Flags tool output, and files read from outside the repo, that give the model orders. |
+| `githubReminders` | on | Reminds the agent once before a push or a `gh` change. |
+| `autoApprove` | on | Skips the host's prompt for calls Jev rates safe. |
+| `nudges` | on | One-time notes: a reply that breaks your `CLAUDE.md` writing rules, a vague subagent brief, an agent stuck on one approach. |
+| `trimContext` | on | Cuts long shell output, and loads only the skill a request needs. |
+| `autoCompact` | on | Compacts fast when the task changes, keeping what still matters. |
+| `routing` | `effort` | `off`, `effort` (effort and the subagent model per request), or `model` (the main model too, which drops the prompt cache). |
+| `jevTools` | on | The `ask_jev` and `find_code` tools. |
+| `browse` | off | The `browse` tool. Needs uv and Chrome. |
+| `statusLine` | on | The status under the prompt, and a dim line per decision. |
 
 ## Privacy
 
@@ -380,8 +364,8 @@ same call to proceed. This reminder alone does not require asking you. Set `gith
 
 **`jev ⚠ down`.** Jev failed or took over 1.5 s in the last 5 minutes. Calls go through until it's back.
 
-**Blocked by mistake in lockdown.** Say yes and it runs. `/omj` shows why. Raise that gate's threshold, turn it off, or `/omj off`
-for the session. Local MCP tools sometimes trip `exfilGate`.
+**Blocked by mistake in lockdown.** Say yes and it runs. `/omj` shows why. `/omj config lockdown off` or `/omj off` for
+the session. Local MCP tools sometimes trip the exfiltration check.
 
 **Nothing happens.** The first transcript line should start with `[ohmyjev]`. If not, run `claude --debug` to see which
 hook failed.

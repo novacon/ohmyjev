@@ -508,7 +508,7 @@ test('final review: only general-purpose subagents are routed; an agent with its
   expect((await $.agent.spawn(spawnArgs as never)).model).toBe('claude-opus-5-5')
 })
 
-test('/omj settings shows the sections with the key hidden; /omj config gates opens one', { options: { lockdown: true, apiKey: 'sk-secret-123', policies: 'never touch prod' } }, async ($, on) => {
+test('/omj settings lists every setting with the key hidden', { options: { lockdown: true, apiKey: 'sk-secret-123', policies: 'never touch prod' } }, async ($, on) => {
   harness(on, () => ({}))
   const run = (args: string) => $.command.run({ command: 'omj', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false } } as never)
   const r = await run('settings')
@@ -517,7 +517,6 @@ test('/omj settings shows the sections with the key hidden; /omj config gates op
   expect(r.text).not.toContain('bashIrreversible')
   expect(r.text).toContain('/plugin configure ohmyjev@ohmyjev')
   expect(r.text).not.toContain('sk-secret-123')
-  expect((await run('config gates')).text).toContain('bashIrreversible: 0.6')
 })
 
 test('/omj off lets everything through for the session; /ohmyjev on brings the gates back', { options: { lockdown: true } }, async ($, on) => {
@@ -600,12 +599,13 @@ test('after a block, a bare "yes" reaches Jev with the blocked call beside it', 
   expect(fake.requests.filter(r => r.body.state.command === 'rm -rf ~/.agentmemory').at(-1)!.body.state.blocked_before).toBe(undefined)
 })
 
-test('/omj config bashGate off turns that gate off for the session', { options: { lockdown: true } }, async ($, on) => {
+test('/omj config lockdown off turns the gates off for the session', { options: { lockdown: true } }, async ($, on) => {
   const fake = harness(on, () => bashAns('irreversible', 0.95, 0.9))
   tool(on)
   const run = (args: string) => $.command.run({ command: 'omj', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false } } as never)
-  expect((await run('config')).text).toContain('bashGate: on')
-  expect((await run('config bashGate off')).text).toContain('bashGate: off * for this session')
+  expect((await run('config')).text).toContain('lockdown: on *')
+  expect((await run('config lockdown off')).text).toContain('lockdown: off for this session')
+  expect((await run('config autoApprove off')).text).toContain('autoApprove: off * for this session')
   expect((await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).deny).toBe(undefined)
   expect(fake.requests.filter(r => 'effect' in r.body.questions).length).toBe(0)
 })

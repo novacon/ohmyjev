@@ -3,20 +3,58 @@
  * it. Rubrics: github.com/disler/ten-levels-of-jev.
  */
 
-// --- config: mirrors plugin.json userConfig (the engine fills defaults; DEFAULTS serves tests) ---
+// --- config: SETTINGS mirrors plugin.json userConfig and omp's settings (the engine fills defaults) ---
 
-export const DEFAULTS = {
-  apiKey: '',
-  jevModel: 'jev-1.13.0',
+/** What a person sets, in the order every settings screen shows them. Each switch turns a whole feature on or off. */
+export const SETTINGS = {
   enabled: true,
+  apiKey: '',
   lockdown: false,
+  allowPaths: '~/.claude;$TMPDIR;/tmp',
+  policies: '',
+  injectionScreen: true,
   githubReminders: true,
+  autoApprove: true,
+  nudges: true,
+  trimContext: true,
+  autoCompact: true,
+  routing: 'effort',
+  jevTools: true,
+  browse: false,
+  statusLine: true,
+}
+export const SECTIONS = {
+  jev: ['enabled', 'apiKey'],
+  safety: ['lockdown', 'allowPaths', 'policies', 'injectionScreen', 'githubReminders', 'autoApprove'],
+  helpers: ['nudges', 'trimContext', 'autoCompact', 'routing', 'jevTools', 'browse', 'statusLine'],
+} as const satisfies Record<string, readonly (keyof typeof SETTINGS)[]>
+export const ROUTING = ['off', 'effort', 'model'] as const
+
+/** The switches a setting turns: lockdown already holds every blocking gate, so those stay on beneath it. */
+const expand = (s: typeof SETTINGS) => ({
+  screenReads: s.injectionScreen,
+  proseCheck: s.nudges,
+  subagentCheck: s.nudges,
+  stuckCheck: s.nudges,
+  trimOutput: s.trimContext,
+  skillPick: s.trimContext,
+  fastCompact: s.autoCompact,
+  routeEffort: s.routing !== 'off',
+  routeSubagents: s.routing !== 'off',
+  routeMainModel: s.routing === 'model',
+  askJev: s.jevTools,
+  findCode: s.jevTools,
+  logDecisions: s.statusLine,
+})
+
+/** SETTINGS plus the fixed tuning beneath them: thresholds, models, timeouts. Tests and omp override these directly. */
+export const DEFAULTS = {
+  ...SETTINGS,
+  jevModel: 'jev-1.13.0',
   bashGate: true,
   writeGate: true,
-  injectionScreen: true,
   doneCheck: true,
   exfilGate: true,
-  screenReads: true,
   bashIrreversible: 0.6,
   bashDestructive: 0.7,
   writeSecret: 0.7,
@@ -27,32 +65,18 @@ export const DEFAULTS = {
   doneAsksUserMax: 0.5,
   exfil: 0.7,
   requested: 0.8,
-  autoApprove: true,
-  stuckCheck: true,
-  skillPick: true,
   skillGate: 0.3,
   skillMin: 0.4,
-  trimOutput: true,
   trimOver: 12000,
   trimKeep: 0.3,
   stuck: 0.7,
   approveConfidence: 0.9,
   approveRiskMax: 0.2,
-  askJev: true,
-  browse: false,
-  findCode: true,
-  fastCompact: true,
-  subagentCheck: true,
-  proseCheck: true,
   maskSecrets: true,
   readNarrow: false,
-  autoCompact: true,
   compactSwitched: 0.8,
   compactBoundary: 0.6,
   compactMinPercent: 40,
-  routeEffort: true,
-  routeSubagents: true,
-  routeMainModel: false,
   routeUpgrade: 0.3,
   routeDowngrade: 0.6,
   routeRisky: 0.7,
@@ -60,16 +84,17 @@ export const DEFAULTS = {
   fastModel: 'claude-haiku-5-5',
   balancedModel: 'claude-sonnet-5-5',
   deepModel: 'claude-opus-5-5',
-  allowPaths: '~/.claude;$TMPDIR;/tmp',
-  policies: '',
   timeoutMs: 1500,
-  logDecisions: true,
-  statusLine: true,
+  ...expand(SETTINGS),
 }
 
 export type Config = typeof DEFAULTS
 
-export const readConfig = (options: Readonly<Record<string, unknown>>): Config => ({ ...DEFAULTS, ...options }) as Config
+/** A setting expands into the switches beneath it; a switch named directly (tests, an older settings file) still wins. */
+export const readConfig = (options: Readonly<Record<string, unknown>>): Config => {
+  const set = { ...DEFAULTS, ...options } as Config
+  return { ...set, ...expand(set), ...options } as Config
+}
 
 export const splitList = (s: string): string[] => s.split(';').map(x => x.trim()).filter(Boolean)
 
@@ -630,65 +655,40 @@ export type LogEntry = {
 
 // --- ask_jev, /omj and /ohmyjev ---
 
-export const OMJ_HELP = 'usage: /omj [stats|config [section|name value]|on|off]. /ohmyjev is the same command.'
+export const OMJ_HELP = 'usage: /omj [stats|config [name value]|on|off]. /ohmyjev is the same command.'
 export const DASHBOARD = 'dashboard.html'
 export const OMJ_OFF = 'ohmyjev off for this session: every call passes through. /omj on turns it back. The enabled setting is the default for new sessions.'
 export const OMJ_ON = 'ohmyjev on for this session. Blocking gates require lockdown; screens and router follow their settings.'
 /** `/omj on|off` as the new enabled value; undefined for any other argument. */
 export const toggleArg = (args: string): boolean | undefined => ({ on: true, off: false })[args.trim() as 'on' | 'off']
-/**
- * The settings by section, in the order every settings screen shows them (plugin.json and package.json follow this;
- * tests check). Each section's switches and text come first, its thresholds after: /omj config shows the first, and
- * /omj config <section> all of it.
- */
-export const SECTIONS = {
-  jev: ['enabled', 'apiKey', 'jevModel', 'maskSecrets', 'timeoutMs'],
-  gates: ['lockdown', 'githubReminders', 'bashGate', 'writeGate', 'exfilGate', 'policies', 'allowPaths', 'bashIrreversible', 'bashDestructive', 'writeSecret', 'writeSecretsKind', 'exfil', 'requested'],
-  checks: ['injectionScreen', 'screenReads', 'doneCheck', 'subagentCheck', 'proseCheck', 'stuckCheck', 'injection', 'doneClaimed', 'doneVerifiedMax', 'doneAsksUserMax', 'stuck'],
-  speed: ['autoApprove', 'trimOutput', 'skillPick', 'readNarrow', 'approveConfidence', 'approveRiskMax', 'trimOver', 'trimKeep', 'skillGate', 'skillMin'],
-  compaction: ['fastCompact', 'autoCompact', 'compactSwitched', 'compactBoundary', 'compactMinPercent'],
-  router: ['routeEffort', 'routeSubagents', 'routeMainModel', 'routeWithoutKey', 'fastModel', 'balancedModel', 'deepModel', 'routeUpgrade', 'routeDowngrade', 'routeRisky'],
-  tools: ['askJev', 'findCode', 'browse'],
-  display: ['logDecisions', 'statusLine'],
-} as const satisfies Record<string, readonly (keyof Config)[]>
-export type Section = keyof typeof SECTIONS
-
 /** A setting as /omj config shows it: on/off, (empty), the key only as set or not, and `*` when it differs from the default. */
-const showSetting = (c: Config, k: keyof Config): string => {
+const showSetting = (c: Config, k: keyof typeof SETTINGS): string => {
   const v = c[k]
   const shown = k === 'apiKey' ? (v ? 'set (hidden)' : 'not set') : typeof v === 'boolean' ? (v ? 'on' : 'off') : v === '' ? '(empty)' : String(v)
-  return `${k}: ${shown}${v === DEFAULTS[k] ? '' : ' *'}`
+  return `${k}: ${shown}${v === SETTINGS[k] ? '' : ' *'}`
 }
 
-/** Every setting in a section, or only its switches and text (`brief`): numbers are the thresholds. */
-export const settingsRows = (c: Config, section: Section, brief = false): string[] =>
-  SECTIONS[section].filter(k => !brief || typeof DEFAULTS[k] !== 'number').map(k => showSetting(c, k))
-
 /**
- * /omj config: no argument shows each section's switches on one line; a section name lists all of it, thresholds
- * included; `name value` changes one for this session. The key is never set here, so it never lands in the transcript.
- * `persist` is the host's own way to make a change stick.
+ * /omj config: no argument lists every setting by section; `name value` changes one for this session. The key is
+ * never set here, so it never lands in the transcript. `persist` is the host's own way to make a change stick.
  */
 export function configCommand(c: Config, args: string, persist: string): { c: Config; text: string } {
   const [name = '', ...rest] = args.trim().split(/\s+/)
   const value = rest.join(' ')
-  const sections = Object.keys(SECTIONS) as Section[]
   const change = `/omj config <name> <value> changes one for this session. ${persist}`
-  if (!name) {
-    const width = Math.max(...sections.map(s => s.length))
-    return { c, text: [...sections.map(s => `${s.padEnd(width)}  ${settingsRows(c, s, true).join(' · ')}`), '', `* changed from the default. /omj config <section> shows its thresholds too. ${change}`].join('\n') }
-  }
-  if (name in SECTIONS && !value) return { c, text: [`${name}:`, ...settingsRows(c, name as Section).map(r => `  ${r}`), '', change].join('\n') }
-  if (!(name in DEFAULTS) || name === 'apiKey')
-    return { c, text: name === 'apiKey' ? `apiKey is not set here, so it never lands in the transcript. ${persist}` : `no setting named ${name}. /omj config lists the sections (${sections.join(', ')}), and /omj config <section> the settings in one.` }
-  const key = name as keyof Config
-  const was = DEFAULTS[key]
+  if (!name)
+    return { c, text: [...Object.entries(SECTIONS).flatMap(([s, keys]) => [`${s}:`, ...keys.map(k => `  ${showSetting(c, k)}`)]), '', `* changed from the default. ${change}`].join('\n') }
+  if (!(name in SETTINGS) || name === 'apiKey')
+    return { c, text: name === 'apiKey' ? `apiKey is not set here, so it never lands in the transcript. ${persist}` : `no setting named ${name}. /omj config lists them.` }
+  const key = name as keyof typeof SETTINGS
+  const was = SETTINGS[key]
   let next: unknown
   if (typeof was === 'boolean') next = /^(on|true|yes|1)$/i.test(value) ? true : /^(off|false|no|0)$/i.test(value) ? false : undefined
-  else if (typeof was === 'number') next = value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : undefined
+  else if (key === 'routing') next = (ROUTING as readonly string[]).includes(value) ? value : undefined
   else next = value
-  if (next === undefined) return { c, text: `${name} takes ${typeof was === 'boolean' ? 'on or off' : 'a number'}, got "${value}".` }
-  const changed = { ...c, [key]: next } as Config
+  if (next === undefined) return { c, text: `${name} takes ${key === 'routing' ? ROUTING.join(', ') : 'on or off'}, got "${value}".` }
+  const set = { ...c, [key]: next } as Config
+  const changed = { ...set, ...expand(set) }
   return { c: changed, text: `${showSetting(changed, key)} for this session. ${persist}` }
 }
 

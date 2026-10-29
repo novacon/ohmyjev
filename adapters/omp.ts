@@ -3,7 +3,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import {
-  githubCheckpoint, BASH_Q, DEFAULTS, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
+  githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
   clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, configCommand, applyPatchPaths,
   BROWSE_DESCRIPTION, OMJ_HELP, OMJ_OFF, OMJ_ON, toggleArg,
   keepInstructions, modelOf, readConfig, routeStep, screen, stepLine, withPolicies, withPolicyQ,
@@ -28,7 +28,7 @@ const GITHUB_READONLY_OPS: Record<string, true> = {
   run_watch: true,
 }
 const SESSION_LOCAL_WRITE_SCHEMES: Record<string, true> = { local: true }
-const OMP_DEFAULTS = { ...DEFAULTS, fastModel: '@smol', balancedModel: '@default', deepModel: '@slow' }
+const OMP_DEFAULTS = { fastModel: '@smol', balancedModel: '@default', deepModel: '@slow' }
 
 type RecordOfUnknown = Record<string, unknown>
 type Content = { type: string; text?: string; [key: string]: unknown }
