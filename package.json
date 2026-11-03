@@ -1,6 +1,6 @@
 {
   "name": "ohmyjev",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "type": "module",
   "license": "MIT",
@@ -35,8 +35,12 @@
     "hooks/jev.ts",
     "hooks/policy.ts",
     "hooks/prose.ts",
-    "extras/"
+    "extras/",
+    "bin/"
   ],
+  "bin": {
+    "ohmyjev": "bin/ohmyjev.mjs"
+  },
   "pi": {
     "extensions": [
       "./adapters/pi.ts"
@@ -61,7 +65,12 @@
       },
       "lockdown": {
         "type": "boolean",
-        "description": "Block irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and an unverified done",
+        "description": "Block irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and a done claim that a failed or missing check contradicts",
+        "default": false
+      },
+      "shadow": {
+        "type": "boolean",
+        "description": "Run lockdown's checks but only log what they would block; /omj lists the calls. Nothing is blocked. Wins over lockdown",
         "default": false
       },
       "allowPaths": {

@@ -10,6 +10,7 @@ export const SETTINGS = {
   enabled: true,
   apiKey: '',
   lockdown: false,
+  shadow: false,
   allowPaths: '~/.claude;$TMPDIR;/tmp',
   policies: '',
   injectionScreen: true,
@@ -24,10 +25,19 @@ export const SETTINGS = {
 }
 export const SECTIONS = {
   jev: ['enabled', 'apiKey'],
-  safety: ['lockdown', 'allowPaths', 'policies', 'injectionScreen', 'githubReminders'],
+  safety: ['lockdown', 'shadow', 'allowPaths', 'policies', 'injectionScreen', 'githubReminders'],
   helpers: ['nudges', 'trimContext', 'autoCompact', 'routing', 'jevTools', 'browse', 'statusLine'],
 } as const satisfies Record<string, readonly (keyof typeof SETTINGS)[]>
 export const ROUTING = ['off', 'effort', 'model'] as const
+/**
+ * The switches beneath lockdown and shadow: `lockdown` runs the gates, `shadow` makes them log what they would block
+ * and block nothing (shadow wins over lockdown), `lockdownSet` is the lockdown setting as the person left it.
+ */
+const lockdownSwitches = (lockdown: unknown, shadow: unknown) => {
+  const on = lockdown === true || lockdown === 'on' || lockdown === 'true'
+  const sh = shadow === true || shadow === 'on' || shadow === 'true'
+  return { lockdown: on || sh, shadow: sh, lockdownSet: on }
+}
 
 /** The switches a setting turns: lockdown already holds every blocking gate, so those stay on beneath it. */
 const expand = (s: typeof SETTINGS) => ({
@@ -49,6 +59,7 @@ const expand = (s: typeof SETTINGS) => ({
 /** SETTINGS plus the fixed tuning beneath them: thresholds, models, timeouts. Tests and omp override these directly. */
 export const DEFAULTS = {
   ...SETTINGS,
+  ...lockdownSwitches(SETTINGS.lockdown, SETTINGS.shadow),
   jevModel: 'jev-1.13.0',
   bashGate: true,
   writeGate: true,
@@ -82,6 +93,7 @@ export const DEFAULTS = {
   balancedModel: 'claude-sonnet-5-5',
   deepModel: 'claude-opus-5-5',
   timeoutMs: 1500,
+  routeHoldPercent: 50,
   ...expand(SETTINGS),
 }
 
@@ -90,7 +102,7 @@ export type Config = typeof DEFAULTS
 /** A setting expands into the switches beneath it; a switch named directly (tests, an older settings file) still wins. */
 export const readConfig = (options: Readonly<Record<string, unknown>>): Config => {
   const set = { ...DEFAULTS, ...options } as Config
-  return { ...set, ...expand(set), ...options } as Config
+  return { ...set, ...expand(set), ...options, ...lockdownSwitches(options.lockdown, options.shadow) } as Config
 }
 
 export const splitList = (s: string): string[] => s.split(';').map(x => x.trim()).filter(Boolean)
@@ -150,7 +162,7 @@ export type Question =
   | { type: 'choice'; instructions: string; criteria: Record<string, string> }
   | { type: 'score'; instructions: string; criteria: string[] }
 export type Questions = Record<string, Question>
-export type Verdict = 'deny' | 'block' | 'flag' | 'compact' | null
+export type Verdict = 'deny' | 'block' | 'flag' | 'compact' | 'shadow' | null
 export type Judged = { verdict: Verdict; reason: string }
 
 export const noul = (instructions: string, yes?: string, no?: string): Question =>
@@ -347,31 +359,59 @@ const GIT_LISTS: Record<string, RegExp> = { branch: /^(-a|-r|-v|-vv|--list|--sho
  * literal, so a `|` in a grep pattern is fine. Anything else, however harmless, goes to Jev.
  */
 export function isPlainRead(command: string): boolean {
-  if (!command.trim() || /`|\$\(|<\(|>\(/.test(command)) return false
+  const pieces = commandPieces(command)
+  return !!pieces && pieces.every(readPiece)
+}
+
+/**
+ * True for a command that only makes folders, files, copies and moves inside the repo (mkdir, touch, cp, mv, git mv),
+ * mixed with plain reads: every path relative, no `..`, no `-f`, nothing quoted. git or a rerun restores any of it.
+ */
+export function isRepoMove(command: string): boolean {
+  const pieces = /['"]/.test(command) ? null : commandPieces(command)
+  return !!pieces && pieces.some(movePiece) && pieces.every(p => readPiece(p) || movePiece(p))
+}
+
+/** A command's pieces as words, or null when its syntax could hide a write: substitution, redirect, subshell, `&`. */
+function commandPieces(command: string): string[][] | null {
+  if (!command.trim() || /`|\$\(|<\(|>\(/.test(command)) return null
   const s = command
     .replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, 'Q') // quoted text is an argument, not syntax
     .replace(/\s(?:[12]|&)?>\s*\/dev\/null(?=$|[\s;&|])|\s2>&1(?=$|[\s;&|])/g, ' ') // discarding output writes nothing
-  if (/[<>()]|(^|[^&])&($|[^&])|\\\n/.test(s)) return false
-  return s.split(/&&|\|\||;|\||\n/).every(piece => {
+  if (/[<>()]|(^|[^&])&($|[^&])|\\\n/.test(s)) return null
+  return s.split(/&&|\|\||;|\||\n/).map(piece => {
     const w = piece.trim().split(/\s+/).filter(Boolean)
     while (w[0] && /^[A-Za-z_]\w*=\S*$/.test(w[0])) w.shift() // VAR=value: sets a variable, runs nothing
-    const [cmd, ...args] = w
-    if (!cmd) return true
-    if (cmd === 'find') return !w.some(x => /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/.test(x))
-    if (cmd === 'git') {
-      while (args[0] === '--no-pager' || args[0] === '-C') args.splice(0, args[0] === '-C' ? 2 : 1)
-      const [sub, ...rest] = args
-      if (!sub) return false
-      if (GIT_READS.has(sub) || GIT_READS.has(`${sub} ${rest[0]}`)) return !w.some(x => /^--(output|ext-diff)/.test(x))
-      const ok = GIT_LISTS[sub]
-      return !!ok && rest.every(x => ok.test(x)) && (sub !== 'stash' || rest.length > 0) // a bare `git stash` stashes
-    }
-    if (cmd === 'env') return args.length === 0 // env with a command runs that command
-    return READ_CMDS.has(cmd)
+    return w
   })
 }
+
+function readPiece(w: string[]): boolean {
+  const [cmd, ...args] = w
+  if (!cmd) return true
+  if (cmd === 'find') return !w.some(x => /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/.test(x))
+  if (cmd === 'git') {
+    while (args[0] === '--no-pager' || args[0] === '-C') args.splice(0, args[0] === '-C' ? 2 : 1)
+    const [sub, ...rest] = args
+    if (!sub) return false
+    if (GIT_READS.has(sub) || GIT_READS.has(`${sub} ${rest[0]}`)) return !w.some(x => /^--(output|ext-diff)/.test(x))
+    const ok = GIT_LISTS[sub]
+    return !!ok && rest.every(x => ok.test(x)) && (sub !== 'stash' || rest.length > 0) // a bare `git stash` stashes
+  }
+  if (cmd === 'env') return args.length === 0 // env with a command runs that command
+  return READ_CMDS.has(cmd)
+}
+
+function movePiece(w: string[]): boolean {
+  const [cmd, ...args] = w[0] === 'git' && w[1] === 'mv' ? w.slice(1) : w
+  if (!cmd || !['mkdir', 'touch', 'cp', 'mv'].includes(cmd) || !args.length) return false
+  return args.every(x => (x.startsWith('-') ? /^-[pvrRni]+$/.test(x) : !/^[/~$]/.test(x) && !/(^|\/)\.\.(\/|$)/.test(x)))
+}
+
 /** Skip Jev for a plain read, unless the user's policies might forbid even reading something. */
 export const plainRead = (command: string, c: Config): boolean => !splitList(c.policies).length && isPlainRead(command)
+/** Clear a command by code, no Jev call: a plain read, or a move inside the repo. Policies make every call worth a look. */
+export const clearedByCode = (command: string, c: Config): boolean => !splitList(c.policies).length && (isPlainRead(command) || isRepoMove(command))
 
 // --- judges ---
 
@@ -381,13 +421,17 @@ const policyDeny = (a: Answers, threshold: number): Judged | null => {
   return p >= threshold ? { verdict: 'deny', reason: `breaks a listed policy (${f2(p)})` } : null
 }
 
+/** In shadow, a deny is logged as what would have been blocked, and the call runs. */
+export const shadowed = (j: Judged, c: Config): Judged => (c.shadow && j.verdict === 'deny' ? { verdict: 'shadow', reason: `would block: ${j.reason}` } : j)
+
 /** A Jev deny the user's own request asked for passes. Policy and path denies never reach here. */
 const unlessRequested = (j: Judged, a: Answers, c: Config): Judged => {
   const r = nv(a, 'requested')
   return j.verdict === 'deny' && r >= c.requested ? { verdict: null, reason: `${j.reason}; the user asked for it (${f2(r)})` } : j
 }
 
-export function gateBash(a: Answers, c: Config): Judged {
+export const gateBash = (a: Answers, c: Config): Judged => shadowed(gateBashRaw(a, c), c)
+function gateBashRaw(a: Answers, c: Config): Judged {
   const effect = ch(a, 'effect')
   const destructive = nv(a, 'destructive_intent')
   const policy = policyDeny(a, c.bashDestructive)
@@ -402,7 +446,8 @@ export function gateBash(a: Answers, c: Config): Judged {
   return { verdict: null, reason: `${effect.choice} (${f2(effect.confidence)}), destructive ${f2(destructive)}, exfil ${f2(out)}` }
 }
 
-export function gateWrite(a: Answers, c: Config): Judged {
+export const gateWrite = (a: Answers, c: Config): Judged => shadowed(gateWriteRaw(a, c), c)
+function gateWriteRaw(a: Answers, c: Config): Judged {
   const kind = ch(a, 'kind')
   const secret = nv(a, 'contains_secret')
   const policy = policyDeny(a, c.writeSecret)
@@ -414,7 +459,8 @@ export function gateWrite(a: Answers, c: Config): Judged {
   return { verdict: null, reason: `${kind.choice} (${f2(kind.confidence)}), secret ${f2(secret)}` }
 }
 
-export function gateExfil(a: Answers, c: Config): Judged {
+export const gateExfil = (a: Answers, c: Config): Judged => shadowed(gateExfilRaw(a, c), c)
+function gateExfilRaw(a: Answers, c: Config): Judged {
   const p = nv(a, 'exfiltrates')
   const policy = policyDeny(a, c.exfil)
   if (policy) return policy
@@ -431,14 +477,35 @@ export function screen(a: Answers, c: Config): { flagged: boolean; reason: strin
   }
 }
 
-/** The done-check (DONE_REASON when done is claimed with no sign of a check or question) and the compact verdict. */
-/** `ranTools` false: the turn ran no tool, so there is nothing that could have been verified and nothing to block. */
-export function judgeStop(a: Answers, c: Config, ranTools = true): { block: string | null; wantsCompact: boolean } {
-  const unverified =
-    ranTools &&
-    nv(a, 'claimed_done') >= c.doneClaimed && nv(a, 'verified') < c.doneVerifiedMax && nv(a, 'asks_user') < c.doneAsksUserMax
+export const FAILED_CHECK_REASON =
+  'You said this is done, but the last check you ran failed. Fix it, or say plainly that it still fails and why.'
+/** A tool call as the done-check reads it. */
+export type ToolRun = { tool: string; input: string; outcome: string }
+const SHELL_TOOL = /^(bash|powershell|exec_command|shell|mcp__custom-tools__bash)$/i
+const EDIT_TOOL = /^(write|edit|multiedit|notebookedit|apply_patch|mcp__custom-tools__(write|edit))$/i
+const CHECK_CMD = /\b(test|tests|spec|pytest|vitest|jest|mocha|tsc|typecheck|lint|eslint|ruff|mypy|build|check|validate|verify)\b|\b(cargo|go|swift|dotnet)\s+(test|check|build|vet)\b/i
+/** The last check this turn, by code: passed, failed, or null when none ran or an edit came after it. */
+export function lastCheck(tools: readonly ToolRun[]): 'passed' | 'failed' | null {
+  for (let i = tools.length - 1; i >= 0; i--) {
+    const t = tools[i]!
+    if (EDIT_TOOL.test(t.tool)) return null
+    if (SHELL_TOOL.test(t.tool) && CHECK_CMD.test(t.input)) return t.outcome === 'ok' ? 'passed' : t.outcome === 'failed' ? 'failed' : null
+  }
+  return null
+}
+
+/**
+ * The done-check and the compact verdict. Code first: a check that ran and passed is verified, one that failed is
+ * not, whatever Jev reads in the transcript; Jev's `verified` decides only when no check ran. A turn that ran no tool
+ * has nothing that could have been verified and nothing to block.
+ */
+export function judgeStop(a: Answers, c: Config, tools: readonly ToolRun[]): { block: string | null; wantsCompact: boolean } {
+  const check = lastCheck(tools)
+  const claimed = nv(a, 'claimed_done') >= c.doneClaimed && nv(a, 'asks_user') < c.doneAsksUserMax
+  const verified = check ? check === 'passed' : nv(a, 'verified') >= c.doneVerifiedMax
+  const block = tools.length > 0 && claimed && !verified ? (check === 'failed' ? FAILED_CHECK_REASON : DONE_REASON) : null
   const wantsCompact = nv(a, 'switched_gears') >= c.compactSwitched && nv(a, 'at_boundary') >= c.compactBoundary
-  return { block: unverified ? DONE_REASON : null, wantsCompact }
+  return { block, wantsCompact }
 }
 
 // --- router: model names are never shown to Jev ---
@@ -450,7 +517,19 @@ export type Tier = (typeof TIERS)[number]
 /** A confidence of null is unmeasured (the built-in classifier): it may move a request up, never down. */
 export type Route = { tier: Tier; tierConf: number | null; effort: Effort; effortConf: number | null; source: 'jev' | 'builtin' }
 
-export function decideRoute(a: Answers, c: Config): Route {
+/** Words that keep a request off the cheapest tier, whatever Jev or the classifier says. */
+const RISK_WORDS = /\b(prod|production|delete|drop|truncate|migrat\w*|secur\w*|auth\w*|credential\w*|secret\w*|payment\w*|billing|invoice\w*|legal|deploy\w*|release|rollback|password\w*|encrypt\w*)\b/i
+/** A rail that does not depend on Jev being right: a request with a risk word gets at least balanced and medium. */
+export function railed(route: Route, request: string): Route {
+  if (!RISK_WORDS.test(request)) return route
+  const r = { ...route }
+  if (r.tier === 'fast') Object.assign(r, { tier: 'balanced', tierConf: 1 })
+  if (EFFORTS.indexOf(r.effort) < EFFORTS.indexOf('medium')) Object.assign(r, { effort: 'medium', effortConf: 1 })
+  return r
+}
+
+export const decideRoute = (a: Answers, c: Config, request = ''): Route => railed(decideJevRoute(a, c), request)
+function decideJevRoute(a: Answers, c: Config): Route {
   const t = ch(a, 'tier')
   const s = a.effort as Score
   const level = Math.min(EFFORTS.length - 1, Math.max(0, Math.round(s.score)))
@@ -483,9 +562,9 @@ export const TIER_LABELS: readonly string[] = TIERS.map(t => TIER_CRITERIA[t])
 const TIER_EFFORT: Record<Tier, Effort> = { fast: 'low', balanced: 'medium', deep: 'high' }
 
 /** The built-in classifier's label as a route with no confidence; undefined for no answer or a label not ours. */
-export function builtinRoute(label: string | undefined): Route | undefined {
+export function builtinRoute(label: string | undefined, request = ''): Route | undefined {
   const tier = TIERS[TIER_LABELS.indexOf(label ?? '')]
-  return tier && { tier, tierConf: null, effort: TIER_EFFORT[tier], effortConf: null, source: 'builtin' }
+  return tier && railed({ tier, tierConf: null, effort: TIER_EFFORT[tier], effortConf: null, source: 'builtin' }, request)
 }
 
 export function tierOf(model: string, c: Config): Tier {
@@ -499,7 +578,11 @@ export const modelOf = (tier: Tier, c: Config): string => ({ fast: c.fastModel, 
 const shortModel = (m: string): string => /haiku|sonnet|opus|fable/i.exec(m)?.[0]?.toLowerCase() ?? m
 
 /** What to change on a main-loop step, and a status label (`↑opus/high`) when anything moved. */
-export function routeStep(route: Route, step: { model: string; effort?: string | number }, c: Config) {
+/**
+ * `percent` is how full the context is: past routeHoldPercent the main model never moves to a cheaper one, because the
+ * cheaper model would start cold on a large context (a rail that does not depend on Jev).
+ */
+export function routeStep(route: Route, step: { model: string; effort?: string | number; percent?: number }, c: Config) {
   const patch: { model?: string; effort?: Effort } = {}
   let dir = 0
   const cur = step.effort
@@ -513,7 +596,8 @@ export function routeStep(route: Route, step: { model: string; effort?: string |
   if (c.routeMainModel) {
     const curTier = tierOf(step.model, c)
     const t = pick(TIERS, curTier, route.tier, route.tierConf, c)
-    if (t) {
+    const holds = t !== undefined && TIERS.indexOf(t) < TIERS.indexOf(curTier) && (step.percent ?? 0) >= c.routeHoldPercent
+    if (t && !holds) {
       patch.model = modelOf(t, c)
       dir ||= Math.sign(TIERS.indexOf(t) - TIERS.indexOf(curTier))
     }
@@ -531,7 +615,7 @@ export function jevRouteLine(a: Answers, ms: number | undefined): string {
 }
 
 /** What the policy did with the route on the main loop: the move, or what it wanted and why it held back; '' for nothing. */
-export function stepLine(route: Route, step: { model: string; effort?: string | number }, label: string, c: Config): string {
+export function stepLine(route: Route, step: { model: string; effort?: string | number; percent?: number }, label: string, c: Config): string {
   if (label) return `main loop ${label}`
   const cur = typeof step.effort === 'string' && (EFFORTS as readonly string[]).includes(step.effort) ? step.effort : undefined
   const wantEffort = c.routeEffort && cur !== undefined && cur !== route.effort
@@ -633,6 +717,8 @@ export type LogEntry = {
   ms?: number
   inputTokens?: number
   costUsd?: number
+  /** Only on a shadow entry: the call lockdown would have blocked, kept in the local log so the report can show it. */
+  call?: string
 }
 
 // --- ask_jev, /omj and /ohmyjev ---
@@ -640,12 +726,12 @@ export type LogEntry = {
 export const OMJ_HELP = 'usage: /omj [stats|config [name value]|on|off]. /ohmyjev is the same command.'
 export const DASHBOARD = 'dashboard.html'
 export const OMJ_OFF = 'ohmyjev off for this session: every call passes through. /omj on turns it back. The enabled setting is the default for new sessions.'
-export const OMJ_ON = 'ohmyjev on for this session. Blocking gates require lockdown; screens and router follow their settings.'
+export const OMJ_ON = 'ohmyjev on for this session. Blocking gates require lockdown on (shadow only logs); screens and router follow their settings.'
 /** `/omj on|off` as the new enabled value; undefined for any other argument. */
 export const toggleArg = (args: string): boolean | undefined => ({ on: true, off: false })[args.trim() as 'on' | 'off']
 /** A setting as /omj config shows it: on/off, (empty), the key only as set or not, and `*` when it differs from the default. */
 const showSetting = (c: Config, k: keyof typeof SETTINGS): string => {
-  const v = c[k]
+  const v = k === 'lockdown' ? c.lockdownSet : c[k]
   const shown = k === 'apiKey' ? (v ? 'set (hidden)' : 'not set') : typeof v === 'boolean' ? (v ? 'on' : 'off') : v === '' ? '(empty)' : String(v)
   return `${k}: ${shown}${v === SETTINGS[k] ? '' : ' *'}`
 }
@@ -668,9 +754,10 @@ export function configCommand(c: Config, args: string, persist: string): { c: Co
   if (typeof was === 'boolean') next = /^(on|true|yes|1)$/i.test(value) ? true : /^(off|false|no|0)$/i.test(value) ? false : undefined
   else if (key === 'routing') next = (ROUTING as readonly string[]).includes(value) ? value : undefined
   else next = value
-  if (next === undefined) return { c, text: `${name} takes ${key === 'routing' ? ROUTING.join(', ') : 'on or off'}, got "${value}".` }
+  const takes = key === 'routing' ? ROUTING.join(', ') : 'on or off'
+  if (next === undefined) return { c, text: `${name} takes ${takes}, got "${value}".` }
   const set = { ...c, [key]: next } as Config
-  const changed = { ...set, ...expand(set) }
+  const changed = { ...set, ...expand(set), ...lockdownSwitches(key === 'lockdown' ? next : c.lockdownSet, key === 'shadow' ? next : c.shadow) }
   return { c: changed, text: `${showSetting(changed, key)} for this session. ${persist}` }
 }
 
@@ -725,12 +812,15 @@ export function summarize(log: string): string {
   const ms = calls.map(r => r.ms ?? 0).sort((a, b) => a - b)
   const cost = calls.reduce((n, r) => n + (r.costUsd ?? 0), 0)
   const denies = rows.filter(r => r.verdict === 'deny' || r.verdict === 'block')
+  const shadow = rows.filter(r => r.verdict === 'shadow')
   const per = new Map<string, number>()
   for (const r of denies) per.set(r.tool || r.event, (per.get(r.tool || r.event) ?? 0) + 1)
   return [
     `calls ${calls.length} · errors ${rows.filter(r => r.error).length} · cost $${cost.toFixed(6)} · p50 ${ms[Math.floor((ms.length - 1) / 2)] ?? 0}ms`,
     `denies: ${[...per].map(([t, n]) => `${t} ${n}`).join(', ') || 'none'}`,
     ...denies.slice(-5).map(r => `  ${r.tool || r.event}: ${r.reason ?? ''}`),
+    // lockdown shadow: what it would have blocked, with the call, so a wrong block shows before it bites
+    ...(shadow.length ? [`would block (shadow): ${shadow.length}`, ...shadow.slice(-10).map(r => `  ${r.call ?? r.tool}: ${r.reason ?? ''}`)] : []),
   ].join('\n')
 }
 

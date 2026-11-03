@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { SETTINGS, githubCheckpoint, githubMutation, BASH_Q, readConfig } from '../../hooks/policy.ts'
-import { Session, answerAsk, pathAllowed, runBrowse, type Fetch } from '../shared.ts'
+import { Session, answerAsk, keyOf, loadStoredKey, pathAllowed, runBrowse, type Fetch } from '../shared.ts'
 
 let base = ''
 let home = ''
@@ -90,6 +90,26 @@ test('a deny is counted, persisted for the statusline and reported by /jev', asy
   await Bun.sleep(50)
   expect(JSON.parse(await readFile(`${home}/.ohmyjev/sessions/deny.json`, 'utf8'))).toMatchObject({ calls: 1, denies: 1 })
   expect(await x.report()).toContain('irreversible (0.95)')
+})
+
+test('a key `ohmyjev key` stored in ~/.ohmyjev/key is found; the environment key still wins', async () => {
+  const h = `${base}/keyhome`
+  await mkdir(`${h}/.ohmyjev`, { recursive: true })
+  await writeFile(`${h}/.ohmyjev/key`, 'ts-stored\n', { mode: 0o600 })
+  await loadStoredKey({ HOME: h }, false)
+  expect(keyOf(c, { HOME: h })).toMatchObject({ key: 'ts-stored', source: 'stored (ohmyjev key)' })
+  expect(keyOf(c, { HOME: h, TYPESAFE_API_KEY: 'ts-env' })?.key).toBe('ts-env')
+  expect(keyOf(c, { HOME: `${base}/nokey` })).toBe(null)
+})
+
+test('shadow: a code deny is logged with the call, not counted, and the caller is told not to block', async () => {
+  const x = new Session(readConfig({ shadow: true, allowPaths: '' }), env(), 'shadow', undefined, async () => reply(bash))
+  expect(x.denyByCode('write', '/etc/hosts is outside the repo and allowPaths', 'write {"path":"/etc/hosts"}')).toBe(false)
+  expect(new Session(readConfig({ lockdown: true }), env(), 'shadow-off').denyByCode('write', 'x')).toBe(true)
+  await Bun.sleep(50)
+  const report = await x.report()
+  expect(report).toContain('denies: none')
+  expect(report).toContain('would block (shadow): 1\n  write {"path":"/etc/hosts"}: would block: /etc/hosts is outside the repo')
 })
 
 test('ask_jev sends repo files, never a file outside the repo', async () => {

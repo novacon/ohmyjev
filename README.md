@@ -43,17 +43,15 @@ Lockdown is off by default, including for existing installations with individual
 ## Quick start
 
 ```bash
-export TYPESAFE_API_KEY=ts_...     # in your shell profile
+npx ohmyjev install     # ohmyjev in Claude Code, Codex, omp and pi, whichever you have
+npx ohmyjev key         # store your TypeSafe key once, for all of them
 ```
 
-Then in Claude Code:
-
-```
-/plugin install ohmyjev --marketplace Novacon/ohmyjev
-/omj
-```
-
-If `/omj` ends with `key: env TYPESAFE_API_KEY`, you're set. Codex, pi, and omp are under [Install](#install).
+`install` uses each agent's own install command, and updates any that are behind. `--check` shows what it would do,
+`--uninstall` removes it. `key` opens a one-time page on your own computer; the key goes from there into the macOS
+Keychain (`secret-tool` on Linux, a file only you can read elsewhere), and the agent never sees it. On a machine with no
+browser, `npx ohmyjev key --tty` asks in the terminal. Restart running sessions, then `/omj` should end with
+`key: stored (ohmyjev key)`. To do it by hand instead, see [Install](#install).
 
 ## Default behavior
 
@@ -79,6 +77,16 @@ omp plugin config set ohmyjev lockdown true
 
 For Codex, add `"lockdown": true` to `~/.codex/ohmyjev.json`. For pi, set `"lockdown": true` under `ohmyjev` in your settings.
 Set `lockdown` back to `false` to return to normal mode.
+
+**Try it in shadow first.** `shadow` runs every lockdown check and blocks nothing: each call it would have blocked is
+logged with the reason, and `/omj` lists the last ten under `would block (shadow)`. Run `/omj config shadow on` for a day
+of normal work, read the list, and turn `lockdown` on once the list holds only calls you'd want stopped.
+
+**Code decides first.** Lockdown asks Jev only what code can't settle. `ls`, `git status` and other plain reads, and
+moves inside the repo (`mkdir`, `touch`, `cp`, `mv`, `git mv` with relative paths, no `..`, no `-f`), pass without a Jev
+call. The done-check reads the last check that ran this turn (tests, build, typecheck, lint): a failed one means not
+done, a passing one with no edit after it means verified, whatever the transcript says. Jev decides only when no check
+ran.
 
 ## What you get
 
@@ -139,7 +147,8 @@ ones a safe call didn't need. Jev can be wrong, so keep your own deny rules in `
 ## Install
 
 GitHub reminders work without a key. For Jev-backed checks, you need a [TypeSafe](https://typesafe.ai) key, or an OpenRouter key (it then calls `~typesafe/jev-latest`).
-ohmyjev looks for the key in the Claude Code settings screen, then `TYPESAFE_API_KEY`, then `OPENROUTER_API_KEY`.
+ohmyjev looks for the key in the Claude Code settings screen, then `TYPESAFE_API_KEY`, then the key `npx ohmyjev key`
+stored, then `OPENROUTER_API_KEY`.
 
 ### Claude Code
 
@@ -304,7 +313,8 @@ host's settings file. Each setting turns a whole feature on or off; thresholds, 
 |---|---|---|
 | `enabled` | on | Everything. `/omj on` and `off` for one session. |
 | `apiKey` | empty | Your TypeSafe key. Empty uses `$TYPESAFE_API_KEY`, then `$OPENROUTER_API_KEY`. |
-| `lockdown` | off | Blocks irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and an unverified "done". |
+| `lockdown` | off | Blocks irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and a "done" that a failed or missing check contradicts. |
+| `shadow` | off | Runs lockdown's checks but blocks nothing; `/omj` lists what it would have blocked. Wins over `lockdown`. |
 | `allowPaths` | `~/.claude;$TMPDIR;/tmp` | In lockdown, places outside the repo it can write to. |
 | `policies` | empty | Your own rules for lockdown, separated by `;`. |
 | `injectionScreen` | on | Flags tool output, and files read from outside the repo, that give the model orders. |
@@ -312,7 +322,7 @@ host's settings file. Each setting turns a whole feature on or off; thresholds, 
 | `nudges` | on | One-time notes: a reply that breaks your `CLAUDE.md` writing rules, a vague subagent brief, an agent stuck on one approach. |
 | `trimContext` | on | Cuts long shell output, and loads only the skill a request needs. |
 | `autoCompact` | on | Compacts fast when the task changes, keeping what still matters. |
-| `routing` | `effort` | `off`, `effort` (effort and the subagent model per request), or `model` (the main model too, which drops the prompt cache). |
+| `routing` | `effort` | `off`, `effort` (effort and the subagent model per request), or `model` (the main model too, which drops the prompt cache). Two rails hold whatever Jev says: a request with a risk word (prod, delete, migration, security, payment, deploy…) never goes to the cheapest tier or below medium effort, and past 50% context the main model never moves to a cheaper one. |
 | `jevTools` | on | The `ask_jev` and `find_code` tools. |
 | `browse` | off | The `browse` tool. Needs uv and Chrome. |
 | `statusLine` | on | The status under the prompt, and a dim line per decision. |
@@ -340,9 +350,13 @@ Each check sends Jev only what it needs, cut to size, with secrets masked first.
 | `browse` | The goal, then each page's controls and visible text. |
 
 Logs stay in `~/.ohmyjev`, readable only by you. They hold verdicts, probabilities, latency, and cost, never your
-commands' output.
+commands' output. In shadow, an entry for a call lockdown would have blocked also holds that call (600 characters), so
+`/omj` can show it; it never leaves your machine.
 
 ## Update or remove
+
+`npx ohmyjev install` updates every agent that is behind; `npx ohmyjev install --uninstall` removes it from all of
+them. One at a time:
 
 ```bash
 claude plugin update ohmyjev@ohmyjev       # then restart; or: claude plugin uninstall ohmyjev@ohmyjev

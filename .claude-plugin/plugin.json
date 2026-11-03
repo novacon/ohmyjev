@@ -1,6 +1,6 @@
 {
   "name": "ohmyjev",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "description": "Jev for coding agents: effort routing, output checks and GitHub reminders by default, with opt-in lockdown security gates.",
   "author": {
     "name": "lordknows13"
@@ -29,7 +29,13 @@
     "lockdown": {
       "type": "boolean",
       "title": "Lockdown",
-      "description": "Block irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and an unverified done",
+      "description": "Block irreversible commands, writes outside the repo or holding credentials, data leaving through WebFetch or MCP, and a done claim that a failed or missing check contradicts",
+      "default": false
+    },
+    "shadow": {
+      "type": "boolean",
+      "title": "Shadow",
+      "description": "Run lockdown's checks but only log what they would block; /omj lists the calls. Nothing is blocked. Wins over lockdown",
       "default": false
     },
     "allowPaths": {

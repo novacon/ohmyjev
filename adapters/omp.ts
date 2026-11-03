@@ -4,13 +4,13 @@
 import { readFile } from 'node:fs/promises'
 import {
   githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
-  clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, configCommand, applyPatchPaths,
+  clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, clearedByCode, configCommand, applyPatchPaths,
   BROWSE_DESCRIPTION, OMJ_HELP, OMJ_OFF, OMJ_ON, toggleArg,
   keepInstructions, modelOf, readConfig, routeStep, screen, stepLine, withPolicies, withPolicyQ,
   type Config, type Route,
 } from '../hooks/policy.ts'
 import {
-  ASK_DESCRIPTION, FIND_DESCRIPTION, Session, answerAsk, answerFind, newStuck, runBrowse, stuckNote, trimOutput, keyOf, pathAllowed, repoRoot,
+  ASK_DESCRIPTION, FIND_DESCRIPTION, Session, answerAsk, answerFind, newStuck, runBrowse, stuckNote, trimOutput, keyOf, loadStoredKey, pathAllowed, repoRoot,
   type Env, type Fetch,
 } from './shared.ts'
 
@@ -242,6 +242,8 @@ function askSchema(pi: OmpApi): unknown {
 export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi) => void {
   return (pi: OmpApi): void => {
     const env = options.env ?? process.env
+    // ponytail: not awaited (the factory is sync); the read takes ~30 ms, long before the first Jev call
+    void loadStoredKey(env, !options.env)
     const githubSeen = new Set<string>()
     let c: Config = readConfig(OMP_DEFAULTS)
     let session: Session | undefined
@@ -353,7 +355,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
       }
       const d = await session.decide('turn.start', '', { request: clip(prompt, 1500) }, ROUTE_Q)
       if (!d) return
-      route = decideRoute(d.answers, c)
+      route = decideRoute(d.answers, c, prompt)
       say(ctx, jevRouteLine(d.answers, d.e.ms))
       session.record(d, null, `${route.tier} (${route.tierConf?.toFixed(2) ?? 'n/d'}), ${route.effort} (${route.effortConf?.toFixed(2) ?? 'n/d'})`)
     }
@@ -376,7 +378,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           : sameModel(model, deep)
             ? c.deepModel
             : modelName(model)
-      const step = { model: routedModelName, effort: userEffort === 'auto' ? undefined : userEffort }
+      const step = { model: routedModelName, effort: userEffort === 'auto' ? undefined : userEffort, percent: ctx.getContextUsage()?.percent ?? 0 }
       const routingConfig = userEffort === 'auto' ? { ...c, routeEffort: false } : c
       const { patch, label } = routeStep(route, step, routingConfig)
       setManagedThinking(ctx, patch.effort ?? step.effort)
@@ -526,12 +528,12 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
         const event = rawEvent as ToolCall
         const tool = event.toolName
         const input = object(event.input)
-        if (!c.lockdown && c.githubReminders) {
+        if ((!c.lockdown || c.shadow) && c.githubReminders) {
           const note = githubCheckpoint(tool, input, githubSeen)
           if (note) return { block: true, reason: note }
         }
         if ((tool === 'bash' || tool === 'eval' || githubWrite(tool, input)) && c.lockdown && c.bashGate) {
-          if (tool === 'bash' && plainRead(string(input, 'command'), c)) return // code says read-only, no Jev call
+          if (tool === 'bash' && clearedByCode(string(input, 'command'), c)) return // a read or an in-repo move: code clears it
           const command = tool === 'eval'
             ? string(input, 'code')
             : tool === 'github'
@@ -551,7 +553,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           const d = await session.decide('tool_call', tool, withPolicies(state, c, userRequest, blockedBefore), withPolicyQ(BASH_Q, c, userRequest))
           if (!d) return
           const judged = gateBash(d.answers, c)
-          session.record(d, judged.verdict, judged.reason)
+          session.record(d, judged.verdict, judged.reason, callSummary(tool, input))
           if (judged.verdict === 'deny') {
           lastBlocked = callSummary(tool, input)
           return { block: true, reason: denyText(judged.reason) }
@@ -562,13 +564,12 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           const paths = writePaths(tool, input)
           if (!paths.length) {
             const reason = `could not determine a destination path for ${tool}`
-            session.denyByCode(tool, reason)
-            return { block: true, reason: denyText(reason) }
+            if (session.denyByCode(tool, reason, callSummary(tool, input))) return { block: true, reason: denyText(reason) }
           }
           for (const path of paths) {
             if (!sessionLocalWrite(path) && !(await pathAllowed(path, ctx.cwd, root, c, env))) {
-              session.denyByCode(tool, `${path} is outside the repo and allowPaths`)
-              return { block: true, reason: pathDenyText(path) }
+              if (session.denyByCode(tool, `${path} is outside the repo and allowPaths`, callSummary(tool, input))) return { block: true, reason: pathDenyText(path) }
+              break
             }
           }
           const path = paths.join('; ')
@@ -579,7 +580,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           )
           if (!d) return
           const judged = gateWrite(d.answers, c)
-          session.record(d, judged.verdict, judged.reason)
+          session.record(d, judged.verdict, judged.reason, callSummary(tool, input))
           if (judged.verdict === 'deny') {
           lastBlocked = callSummary(tool, input)
           return { block: true, reason: denyText(judged.reason) }
@@ -594,7 +595,7 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           )
           if (!d) return
           const judged = gateExfil(d.answers, c)
-          session.record(d, judged.verdict, judged.reason)
+          session.record(d, judged.verdict, judged.reason, callSummary(tool, input))
           if (judged.verdict === 'deny') {
           lastBlocked = callSummary(tool, input)
           return { block: true, reason: denyText(judged.reason) }
@@ -673,11 +674,12 @@ export function createExtension(options: OmpExtensionOptions = {}): (pi: OmpApi)
           scheduleCompact(ctx)
           return
         }
-        const judged = judgeStop(d.answers, c, state.tools_this_turn.length > 0)
-        const block = c.lockdown && c.doneCheck ? judged.block : null
+        const judged = judgeStop(d.answers, c, state.tools_this_turn)
+        const would = c.lockdown && c.doneCheck ? judged.block : null
+        const block = c.shadow ? null : would
         if (block) pushedBackAt = requests.length
         if (c.autoCompact && judged.wantsCompact) compactPending = true
-        session.record(d, block ? 'block' : null, block ?? (judged.wantsCompact ? 'task switched' : 'stop ok'))
+        session.record(d, block ? 'block' : would ? 'shadow' : null, block ?? (would ? `would block: ${would}` : judged.wantsCompact ? 'task switched' : 'stop ok'), would ? 'Stop' : undefined)
         if (block) return { decision: 'block', reason: block }
         scheduleCompact(ctx)
       } catch {

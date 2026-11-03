@@ -7,12 +7,12 @@ import { FIND_DESCRIPTION, FIND_SCHEMA, find, narrowNote, narrowRead, sweep, typ
 import { HEADER as COMPACT_HEADER, judgeable, select, type Block } from './compact.ts'
 import { MIN_REPLY, broken, extractionPrompt, filesHash, parseRules, rewriteReason, ruleQuestions, type Rule } from './prose.ts'
 import { dashboardHtml } from './dashboard.ts'
-import { ENDPOINTS, JevError, parseReply, pickKey, type Key } from './jev.ts'
+import { ENDPOINTS, JevError, KEY_FILE, KEY_READERS, parseReply, pickKey, type Key } from './jev.ts'
 import {
   githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
   EMPTY_SESSION, absolute, clip, denyText, expandRoot, gateBash, gateExfil, gateWrite, hostPath, isUnder, judgeStop, normalize, parseWorktrees, pathDenyText, rawAbsolute,
   ASK_DESCRIPTION, ASK_SCHEMA, buildQuestion, builtinRoute, decideRoute, jevRouteLine, keepInstructions, statusText, stepLine, summarize, modelOf, readConfig, routeStep,
-  BROWSE_DESCRIPTION, BROWSE_SCHEMA, BROWSE_TIMEOUT_MS, browseCommand, browseReply, STUCK_Q, BRIEF_Q, maskSecrets, SUBAGENT_DONE_REASON, judgeBrief, fitsQuestion, pickSkill, skillFits, skillNote, skillQuestions, trimChunks, trimRequest, trimmed, failureOf, judgeStuck, stuckDue, stuckState, type Failure, callSummary, clipTail, configCommand, plainRead, sanitizeSid, screen, splitList, withPolicies, withPolicyQ, TIER_LABELS, DASHBOARD, OMJ_HELP, OMJ_OFF, OMJ_ON, parseLog, toggleArg,
+  BROWSE_DESCRIPTION, BROWSE_SCHEMA, BROWSE_TIMEOUT_MS, browseCommand, browseReply, STUCK_Q, BRIEF_Q, maskSecrets, SUBAGENT_DONE_REASON, judgeBrief, fitsQuestion, pickSkill, skillFits, skillNote, skillQuestions, trimChunks, trimRequest, trimmed, failureOf, judgeStuck, stuckDue, stuckState, type Failure, callSummary, clipTail, configCommand, plainRead, clearedByCode, sanitizeSid, screen, splitList, withPolicies, withPolicyQ, TIER_LABELS, DASHBOARD, OMJ_HELP, OMJ_OFF, OMJ_ON, parseLog, toggleArg,
   type Config, type Judged, type LogEntry, type Route, type Questions, type SessionState, type Verdict,
 } from './policy.ts'
 
@@ -61,7 +61,19 @@ const TIMEOUT = Symbol('timeout')
 
 /** Config apiKey, then $TYPESAFE_API_KEY, then $OPENROUTER_API_KEY; null when none is set. */
 async function keyOf($: $, c: Config): Promise<Key | null> {
-  return pickKey(c.apiKey, c.jevModel, await $.env.get('TYPESAFE_API_KEY'), await $.env.get('OPENROUTER_API_KEY'))
+  const ts = await $.env.get('TYPESAFE_API_KEY')
+  const stored = c.apiKey || ts ? '' : await (storedKey ??= readStoredKey($)) // read once per load, only when needed
+  return pickKey(c.apiKey, c.jevModel, ts, await $.env.get('OPENROUTER_API_KEY'), stored)
+}
+
+/** The key `ohmyjev key` stored: the OS secret store, else ~/.ohmyjev/key; '' when there is none. */
+async function readStoredKey($: $): Promise<string> {
+  for (const argv of KEY_READERS) {
+    const r = await $.process.run([...argv], { timeoutMs: 2000 }).catch(() => undefined)
+    if (r?.exitCode === 0 && r.stdout.trim()) return r.stdout.trim()
+  }
+  const file = await $.fs.read(`${(await $.env.get('HOME')) ?? ''}/${KEY_FILE}`).catch(() => '')
+  return typeof file === 'string' ? file.trim() : ''
 }
 
 /** One decision request, raced against a timeout. Throws JevError; the caller passes through on any failure. */
@@ -165,6 +177,8 @@ let failures: Failure[] = [] // this request's failed tool calls, for the stuck 
 let stuckAskedAt = 0 // how many failures there were when the stuck check last asked
 let userRequest = '' // the user's latest message: the gates ask whether it asked for the call
 let liveRequest = '' // the latest request the Stop hook saw: what any compaction must keep
+let storedKey: Promise<string> | undefined // the key `ohmyjev key` stored, read once per load
+let contextPercent = 0 // how full the context was at the last measure: the router holds the main model past routeHoldPercent
 let compactPending = false // a task switch at a boundary, waiting for the context to fill past compactMinPercent
 let saidStepFor = '' // the turn whose main-loop routing line is already in the transcript
 
@@ -202,9 +216,10 @@ async function decide($: $, event: string, tool: string, state: unknown, questio
   }
 }
 
-function record($: $, d: { e: LogEntry; x: Ctx }, verdict: Verdict, reason: string) {
+function record($: $, d: { e: LogEntry; x: Ctx }, verdict: Verdict, reason: string, call?: string) {
   d.e.verdict = verdict
   d.e.reason = reason
+  if (verdict === 'shadow' && call) d.e.call = call
   if (verdict === 'deny' || verdict === 'block') d.x.s.denies++
   writeSession($, d.x.p, d.x.s)
   appendLog($, d.x.p, d.e)
@@ -261,6 +276,12 @@ async function pathAllowed($: $, path: string, cwd: string, withAllowPaths = tru
 
 // --- gates (before the tool runs) ---
 
+/** A call as the shadow report shows it: the tool and its input, without the engine's own fields. */
+function shownCall(tool: string, e: object): string {
+  const { tool: _t, tool_use_id: _id, consent: _c, ...input } = e as Record<string, unknown>
+  return callSummary(tool, input)
+}
+
 /** A Jev verdict as the deny text, remembering the denied call so the user's next "yes" can confirm it. */
 function blocked(j: Judged, tool: string, input: unknown): string | undefined {
   if (j.verdict !== 'deny') return undefined
@@ -275,12 +296,12 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
   const cwd = await $.session.cwd()
   if (kind === 'Bash' && c.bashGate) {
     const command = arg(e, 'command')
-    if (plainRead(command, c)) return undefined // ls, git status, grep: code says read-only, no Jev call
+    if (clearedByCode(command, c)) return undefined // ls, git status, mv a b: code clears it, no Jev call
     const state = { command: clip(command, CLIP), cwd, description: clip(arg(e, 'description'), 300), ...(command.length > CLIP ? { truncated: true } : {}) }
     const d = await decide($, 'tool.call', tool, withPolicies(state, c, userRequest, blockedBefore), withPolicyQ(BASH_Q, c, userRequest))
     if (!d) return undefined
     const j = gateBash(d.answers, c)
-    record($, d, j.verdict, j.reason)
+    record($, d, j.verdict, j.reason, shownCall(tool, e))
     return blocked(j, tool, e)
   }
   if (WRITE_TOOLS.includes(kind) && c.writeGate) {
@@ -288,9 +309,14 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
     if (path === null || !(await pathAllowed($, path, cwd))) {
       const shown = path ?? arg(e, 'path')
       const x = await session($)
+      const reason = `${shown} is outside the repo and allowPaths`
+      if (c.shadow) {
+        appendLog($, x.p, { ts: Date.now(), session: x.p.sid, event: 'tool.call', tool, verdict: 'shadow', reason: `would block: ${reason}`, call: shownCall(tool, e) })
+        return undefined
+      }
       x.s.denies++
       writeSession($, x.p, x.s)
-      appendLog($, x.p, { ts: Date.now(), session: x.p.sid, event: 'tool.call', tool, verdict: 'deny', reason: `${shown} is outside the repo and allowPaths` })
+      appendLog($, x.p, { ts: Date.now(), session: x.p.sid, event: 'tool.call', tool, verdict: 'deny', reason })
       return pathDenyText(shown)
     }
     const edits = (e as { edits?: unknown }).edits
@@ -298,7 +324,7 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
     const d = await decide($, 'tool.call', tool, withPolicies({ path, content: clip(content, CLIP) }, c, userRequest, blockedBefore), withPolicyQ(WRITE_Q, c, userRequest))
     if (!d) return undefined
     const j = gateWrite(d.answers, c)
-    record($, d, j.verdict, j.reason)
+    record($, d, j.verdict, j.reason, shownCall(tool, e))
     return blocked(j, tool, e)
   }
   if ((kind === 'WebFetch' || kind.startsWith('mcp__')) && c.exfilGate) {
@@ -307,7 +333,7 @@ async function gate($: $, e: { tool: string }): Promise<string | undefined> {
     const d = await decide($, 'tool.call', tool, state, withPolicyQ(EXFIL_Q, c, userRequest))
     if (!d) return undefined
     const j = gateExfil(d.answers, c)
-    record($, d, j.verdict, j.reason)
+    record($, d, j.verdict, j.reason, shownCall(tool, e))
     return blocked(j, tool, e)
   }
   return undefined
@@ -618,7 +644,7 @@ async function classify($: $, text: string): Promise<void> {
   if (!(await keyOf($, c))) return classifyBuiltin($, text)
   const d = await decide($, 'turn.start', '', { request: clip(text, 1500) }, ROUTE_Q)
   if (!d) return
-  route = decideRoute(d.answers, c)
+  route = decideRoute(d.answers, c, text)
   say($, jevRouteLine(d.answers, d.e.ms))
   record($, d, null, `${route.tier} (${route.tierConf?.toFixed(2) ?? 'n/d'}), ${route.effort} (${route.effortConf?.toFixed(2) ?? 'n/d'})`)
 }
@@ -626,7 +652,7 @@ async function classify($: $, text: string): Promise<void> {
 /** No Jev key: Claude Code's own small model picks the tier. It reports no confidence, so the route only moves up. */
 async function classifyBuiltin($: $, text: string): Promise<void> {
   if (!c.routeWithoutKey) return
-  route = builtinRoute(await $.model.classify(clip(text, 1500), TIER_LABELS).catch(() => undefined))
+  route = builtinRoute(await $.model.classify(clip(text, 1500), TIER_LABELS).catch(() => undefined), text)
   if (!route) return
   say($, `built-in classifier (no Jev key): tier ${route.tier}, effort ${route.effort}; no confidence, so it only routes up`)
   const x = await session($)
@@ -642,6 +668,7 @@ async function noteRoute($: $, label: string): Promise<void> {
 
 export const register: Register = (on, options) => {
   c = readConfig(options)
+  storedKey = undefined
   githubSeen = new Set<string>()
   ctx = undefined
   pushedBackAt = -1
@@ -673,7 +700,7 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     if (!route || e.agentId) return yield* next(e)
-    const { patch, label } = routeStep(route, e, c)
+    const { patch, label } = routeStep(route, { ...e, percent: contextPercent }, c)
     if (saidStepFor !== e.turnId) {
       saidStepFor = e.turnId
       const line = stepLine(route, e, label, c)
@@ -710,7 +737,7 @@ export const register: Register = (on, options) => {
     const state = { current_request: clip(briefs.get(e.agent_id) ?? '', 600), previous_requests: [], tools_this_turn: tools, last_assistant_message: clip(e.last_assistant_message, 1500) }
     const d = await decide($, 'SubagentStop', e.agent_type, state, STOP_Q)
     if (!d) return r
-    const j = judgeStop(d.answers, c, tools.length > 0)
+    const j = judgeStop(d.answers, c, tools)
     record($, d, j.block ? 'block' : null, j.block ? 'subagent done unverified' : 'subagent stop ok')
     return j.block ? { ...r, block: SUBAGENT_DONE_REASON } : r
   })
@@ -789,7 +816,7 @@ export const register: Register = (on, options) => {
       return c.enabled ? screenResult($, e, r) : r
     }
     if (!c.enabled) return next(e)
-    if (!c.lockdown && c.githubReminders) {
+    if ((!c.lockdown || c.shadow) && c.githubReminders) {
       const { tool_use_id: _id, consent: _consent, tool: _tool, ...input } = e as Record<string, unknown>
       const note = githubCheckpoint(String(e.tool), input, githubSeen)
       if (note) return { deny: note }
@@ -822,11 +849,12 @@ export const register: Register = (on, options) => {
     const questions = state.previous_requests.length ? { ...STOP_Q, ...SWITCHED_Q } : STOP_Q
     const d = await decide($, 'Stop', '', state, questions)
     if (!d) return r
-    const j = judgeStop(d.answers, c, state.tools_this_turn.length > 0)
-    const block = c.lockdown && c.doneCheck ? j.block : null
+    const j = judgeStop(d.answers, c, state.tools_this_turn)
+    const would = c.lockdown && c.doneCheck ? j.block : null
+    const block = c.shadow ? null : would
     if (block) pushedBackAt = requests.length
     if (c.autoCompact && j.wantsCompact) compactPending = true
-    record($, d, block ? 'block' : null, block ?? (j.wantsCompact ? 'task switched' : 'stop ok'))
+    record($, d, block ? 'block' : would ? 'shadow' : null, block ?? (would ? `would block: ${would}` : j.wantsCompact ? 'task switched' : 'stop ok'), would ? 'Stop' : undefined)
     if (block) return { ...r, block }
     const rewrite = proseAt === requests.length ? null : await proseCheck($, e.last_assistant_message ?? msgs.filter(m => m.role === 'assistant').at(-1)?.text ?? '')
     if (rewrite) proseAt = requests.length
@@ -836,6 +864,7 @@ export const register: Register = (on, options) => {
   // --- auto-compact: after a turn, once the task switched and the context is full enough ---
 
   on('session.measure', async ($, e, next) => {
+    contextPercent = e.context.percent ?? contextPercent
     if (c.enabled && c.autoCompact && compactPending && (e.context.percent ?? 0) >= c.compactMinPercent) {
       compactPending = false
       const x = await session($)

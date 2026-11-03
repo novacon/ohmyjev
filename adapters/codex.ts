@@ -8,9 +8,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import {
   githubCheckpoint, BASH_Q, EXFIL_Q, SCREEN_Q, STOP_Q, WRITE_Q, applyPatchPaths, callSummary, clip, clipTail, denyText, gateBash, gateExfil, gateWrite,
-  judgeStop, pathDenyText, plainRead, readConfig, sanitizeSid, screen, withPolicies, withPolicyQ, type Config,
+  judgeStop, pathDenyText, plainRead, clearedByCode, readConfig, sanitizeSid, screen, withPolicies, withPolicyQ, type Config,
 } from '../hooks/policy.ts'
-import { Session, keyOf, newStuck, pathAllowed, repoRoot, stuckNote, trimOutput, type Env, type Fetch, type Stuck } from './shared.ts'
+import { Session, keyOf, loadStoredKey, newStuck, pathAllowed, repoRoot, stuckNote, trimOutput, type Env, type Fetch, type Stuck } from './shared.ts'
 
 const CLIP = 16000
 type Tool = { tool: string; input: string; outcome: 'ok' | 'failed'; output: string }
@@ -50,13 +50,14 @@ const deny = (reason: string) => ({ hookSpecificOutput: { hookEventName: 'PreToo
 /** One hook event in, Codex's JSON answer out; undefined means no opinion. */
 export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise<object | undefined> {
   const c = await config(env)
+  await loadStoredKey(env, env === process.env)
   const event = str(input, 'hook_event_name')
   const sid = str(input, 'session_id') || 'codex'
   const cwd = str(input, 'cwd') || process.cwd()
   if (!c.enabled) return undefined
 
   if (event === 'SessionStart')
-    return keyOf(c, env) ? undefined : { systemMessage: 'ohmyjev: no Jev key, so every call passes through. Set TYPESAFE_API_KEY in the shell that starts Codex.' }
+    return keyOf(c, env) ? undefined : { systemMessage: 'ohmyjev: no Jev key, so every call passes through. Run `npx ohmyjev key`, or set TYPESAFE_API_KEY in the shell that starts Codex.' }
 
   const st = await load(env, sid)
   if (event === 'UserPromptSubmit') {
@@ -73,7 +74,7 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
   const toolInput = obj(input.tool_input)
 
   if (event === 'PreToolUse') {
-    if (!c.lockdown && c.githubReminders) {
+    if ((!c.lockdown || c.shadow) && c.githubReminders) {
       const seen = new Set(st.githubSeen)
       const note = githubCheckpoint(tool, toolInput, seen)
       if (note) {
@@ -91,12 +92,12 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
     }
     if (tool === 'Bash' && c.bashGate) {
       const command = str(toolInput, 'command')
-      if (plainRead(command, c)) return undefined
+      if (clearedByCode(command, c)) return undefined // a read or an in-repo move: code clears it
       const state = withPolicies({ command: clip(command, CLIP), cwd, ...(command.length > CLIP ? { truncated: true } : {}) }, c, st.request, st.blockedBefore)
       const d = await x.decide('tool.call', tool, state, withPolicyQ(BASH_Q, c, st.request))
       if (!d) return undefined
       const j = gateBash(d.answers, c)
-      x.record(d, j.verdict, j.reason)
+      x.record(d, j.verdict, j.reason, callSummary(tool, toolInput))
       return blocked(j)
     }
     if (tool === 'apply_patch' && c.writeGate) {
@@ -104,14 +105,14 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
       const root = await repoRoot(cwd)
       for (const path of applyPatchPaths(patch))
         if (!(await pathAllowed(path, cwd, root, c, env))) {
-          x.denyByCode(tool, `${path} is outside the repo and allowPaths`)
-          return deny(pathDenyText(path))
+          if (x.denyByCode(tool, `${path} is outside the repo and allowPaths`, callSummary(tool, toolInput))) return deny(pathDenyText(path))
+          break
         }
       const state = withPolicies({ path: applyPatchPaths(patch).join('; '), content: clip(patch, CLIP) }, c, st.request, st.blockedBefore)
       const d = await x.decide('tool.call', tool, state, withPolicyQ(WRITE_Q, c, st.request))
       if (!d) return undefined
       const j = gateWrite(d.answers, c)
-      x.record(d, j.verdict, j.reason)
+      x.record(d, j.verdict, j.reason, callSummary(tool, toolInput))
       return blocked(j)
     }
     if (tool.startsWith('mcp__') && c.exfilGate) {
@@ -119,7 +120,7 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
       const d = await x.decide('tool.call', tool, state, withPolicyQ(EXFIL_Q, c, st.request))
       if (!d) return undefined
       const j = gateExfil(d.answers, c)
-      x.record(d, j.verdict, j.reason)
+      x.record(d, j.verdict, j.reason, callSummary(tool, toolInput))
       return blocked(j)
     }
     return undefined
@@ -158,7 +159,11 @@ export async function handle(input: Input, env: Env, fetchImpl?: Fetch): Promise
     }
     const d = await x.decide('Stop', '', state, STOP_Q)
     if (!d) return undefined
-    const j = judgeStop(d.answers, c, st.tools.length > 0)
+    const j = judgeStop(d.answers, c, st.tools)
+    if (c.shadow && j.block) {
+      x.record(d, 'shadow', `would block: ${j.block}`, 'Stop')
+      return undefined
+    }
     x.record(d, j.block ? 'block' : null, j.block ?? 'stop ok')
     if (!j.block) return undefined
     st.pushedBackAt = st.count

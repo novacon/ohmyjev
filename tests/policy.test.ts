@@ -1,7 +1,7 @@
 import { broken, filesHash, parseRules, rewriteReason, ruleQuestions } from '../hooks/prose.ts'
 import { expect, test } from 'claude-code/testing'
 import {
-  DEFAULTS as c, DONE_REASON, EMPTY_SESSION, absolute, clip, expandRoot, gateBash, gateWrite, isUnder, judgeStop,
+  DEFAULTS as c, DONE_REASON, FAILED_CHECK_REASON, EMPTY_SESSION, isRepoMove, clearedByCode, lastCheck, readConfig, builtinRoute, TIER_LABELS, summarize as summarizeLog, absolute, clip, expandRoot, gateBash, gateWrite, isUnder, judgeStop as judgeStopOf,
   rawAbsolute, sanitizeSid, screen, statusText, type Answers, parseWorktrees, pathDenyText, toggleArg,
   BASH_Q, buildQuestion, summarize, isPlainRead, plainRead, configCommand, browseCommand, browseReply, stuckDue, judgeStuck, trimChunks, trimRequest, trimmed, pickSkill, maskText, maskSecrets, decideRoute, gateExfil, routeStep, tierOf, withPolicies, withPolicyQ,
 } from '../hooks/policy.ts'
@@ -41,8 +41,10 @@ test('injection screen', () => {
   expect(screen(nouls({ injection: 0.69 }), c).flagged).toBe(false)
 })
 
+const edited = [{ tool: 'Edit', input: '{}', outcome: 'ok' }]
 test('done-check judge', () => {
   const base = { claimed_done: 0.8, verified: 0.1, asks_user: 0.1 }
+  const judgeStop = (a: Answers, cc: typeof c) => judgeStopOf(a, cc, edited)
   expect(judgeStop(nouls(base), c).block).toBe(DONE_REASON)
   expect(judgeStop(nouls({ ...base, verified: 0.3 }), c).block).toBe(null)
   expect(judgeStop(nouls({ ...base, asks_user: 0.5 }), c).block).toBe(null)
@@ -93,8 +95,20 @@ test('a Jev deny the user asked for passes; a policy deny does not', () => {
 
 test('the done-check never blocks a turn that ran no tools', () => {
   const done = nouls({ claimed_done: 0.99, verified: 0, asks_user: 0 })
-  expect(judgeStop(done, c).block).toBe(DONE_REASON)
-  expect(judgeStop(done, c, false).block).toBe(null)
+  expect(judgeStopOf(done, c, edited).block).toBe(DONE_REASON)
+  expect(judgeStopOf(done, c, []).block).toBe(null)
+})
+
+test('code first: the last check that ran decides verified, whatever Jev reads', () => {
+  const sure = nouls({ claimed_done: 0.99, verified: 0.95, asks_user: 0 }) // Jev thinks it was checked
+  const unsure = nouls({ claimed_done: 0.99, verified: 0.05, asks_user: 0 }) // Jev sees no check
+  const run = (input: string, outcome: string) => ({ tool: 'Bash', input: JSON.stringify({ command: input }), outcome })
+  expect(judgeStopOf(sure, c, [run('npm test', 'failed')]).block).toBe(FAILED_CHECK_REASON)
+  expect(judgeStopOf(unsure, c, [run('bun test adapters', 'ok')]).block).toBe(null)
+  expect(judgeStopOf(unsure, c, [run('npm test', 'ok'), { tool: 'Edit', input: '{}', outcome: 'ok' }]).block).toBe(DONE_REASON) // edited after
+  expect(lastCheck([run('cargo test', 'failed'), run('ls', 'ok')])).toBe('failed') // a read after a check leaves it standing
+  expect(lastCheck([run('npm test', 'backgrounded')])).toBe(null) // not finished: Jev decides
+  expect(lastCheck([run('git status', 'ok')])).toBe(null)
 })
 
 test('exfil gate and policies', () => {
@@ -183,10 +197,46 @@ test('plain reads skip Jev; anything that could write or run more does not', () 
   expect(plainRead('ls', { ...c, policies: 'never list prod' })).toBe(false)
 })
 
+test('moves inside the repo are cleared by code; anything that leaves it or forces does not', () => {
+  for (const cmd of ['mv a.md docs/', 'mkdir -p site/img && mv logo.png site/img/', 'git mv old.ts new.ts', 'cp -r src backup && ls backup',
+    'touch notes.txt', 'mv *.md archive/'])
+    expect([cmd, isRepoMove(cmd)]).toEqual([cmd, true])
+  for (const cmd of ['mv a /tmp/a', 'mv a ../other/', 'cp -f a b', 'mv a ~/x', 'mv "a b" c', 'mv $X y', 'ls', 'mv a b && rm c',
+    'mkdir x > log', 'mv', 'cp a b/../../c'])
+    expect([cmd, isRepoMove(cmd)]).toEqual([cmd, false])
+  expect(clearedByCode('mv a.md docs/', c)).toBe(true)
+  expect(clearedByCode('mv a.md docs/', { ...c, policies: 'never move docs' })).toBe(false)
+})
+
+test('shadow: a deny becomes what would have been blocked, and the report lists it with the call', () => {
+  const s = readConfig({ shadow: true })
+  expect([s.lockdown, s.shadow, s.lockdownSet]).toEqual([true, true, false]) // the gates run, and only log
+  expect(gateBash(bash('irreversible', 0.95, 0.9), s)).toMatchObject({ verdict: 'shadow', reason: expect.stringContaining('would block: irreversible') })
+  expect(gateBash(bash('irreversible', 0.95, 0.9), readConfig({ lockdown: true })).verdict).toBe('deny')
+  expect(readConfig({ lockdown: true, shadow: true }).shadow).toBe(true) // shadow wins
+  const log = JSON.stringify({ ts: 1, session: 's', event: 'tool.call', tool: 'Bash', verdict: 'shadow', reason: 'would block: irreversible (0.95)', call: 'Bash {"command":"mv a b"}' })
+  expect(summarizeLog(log)).toContain('would block (shadow): 1\n  Bash {"command":"mv a b"}: would block: irreversible (0.95)')
+})
+
+test('routing rails: a risk word never routes to the cheapest tier; a full context never moves to a cheaper model', () => {
+  const fast = route('fast', 0.95, 0, 0.95)
+  expect(decideRoute(fast, c, 'drop the prod users table').tier).toBe('balanced')
+  expect(decideRoute(fast, c, 'rename this variable').tier).toBe('fast')
+  expect(builtinRoute(TIER_LABELS[0], 'deploy it')?.tier).toBe('balanced')
+  const main = { ...c, routeMainModel: true }
+  const step = { model: 'claude-opus-5-5', effort: 'medium' }
+  expect(routeStep(decideRoute(fast, main), { ...step, percent: 20 }, main).patch.model).toBe('claude-haiku-5-5')
+  expect(routeStep(decideRoute(fast, main), { ...step, percent: 60 }, main).patch.model).toBe(undefined)
+})
+
 test('/omj config lists, changes one setting for the session, and never takes the key', () => {
   const p = 'persist hint'
   const overview = configCommand(c, '', p).text
-  expect(overview).toContain('safety:\n  lockdown: off\n  allowPaths:')
+  expect(overview).toContain('safety:\n  lockdown: off\n  shadow: off\n  allowPaths:')
+  const sh = configCommand(c, 'shadow on', p).c
+  expect([sh.lockdown, sh.shadow]).toEqual([true, true])
+  expect(configCommand(sh, 'shadow off', p).c.lockdown).toBe(false) // back to lockdown as it was set
+  expect(configCommand(configCommand(c, 'lockdown on', p).c, '', p).text).toContain('lockdown: on *')
   expect(overview).toContain('  routing: effort')
   expect(overview).not.toContain('bashIrreversible') // tuning is not a setting
   expect(configCommand(c, 'nudges off', p).c.proseCheck).toBe(false) // a setting turns the switches beneath it

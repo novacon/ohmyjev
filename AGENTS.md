@@ -4,6 +4,7 @@
 - `hooks/policy.ts`, `hooks/jev.ts`: pure decision logic, shared by every agent version.
 - `hooks/ohmyjev.ts`: the Claude Code plugin (`.claude-plugin/plugin.json`, `/plugin install ohmyjev --marketplace Novacon/ohmyjev`).
 - `adapters/shared.ts`, `adapters/omp.ts`, `adapters/pi.ts`: the omp and pi extensions, published to npm as `ohmyjev` (`package.json`).
+- `bin/ohmyjev.mjs`: `npx ohmyjev install|key`, plain Node with no dependencies (it ships in the npm package). `install` only calls each agent's own install command; `key` stores the TypeSafe key where `hooks/jev.ts` `KEY_READERS` look.
 - `site/`: ohmyjev.xyz. GitHub Pages deploys it on every push to `main` that touches `site/`.
 
 ## Checks

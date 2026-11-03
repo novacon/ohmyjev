@@ -201,6 +201,7 @@ key: env TYPESAFE_API_KEY · typesafe · jev-1.13.0</pre></div>
               <tr><td><code>enabled</code></td><td class="on">on</td><td>The whole thing. <code>/omj on</code> and <code>off</code> for one session.</td></tr>
               <tr><td><code>apiKey</code></td><td>empty</td><td>Your TypeSafe key. Empty uses <code>$TYPESAFE_API_KEY</code>, then <code>$OPENROUTER_API_KEY</code>.</td></tr>
               <tr><td><code>lockdown</code></td><td>off</td><td>Blocks irreversible commands, writes outside the repo or holding credentials, data leaving, and an unverified "done".</td></tr>
+              <tr><td><code>shadow</code></td><td>off</td><td>Runs lockdown's checks and blocks nothing; <code>/omj</code> lists what it would have blocked. Try this first.</td></tr>
               <tr><td><code>allowPaths</code></td><td>~/.claude;$TMPDIR;/tmp</td><td>In lockdown, places outside the repo it can write to.</td></tr>
               <tr><td><code>policies</code></td><td>empty</td><td>Your own rules for lockdown, separated by <code>;</code>.</td></tr>
               <tr><td><code>injectionScreen</code></td><td class="on">on</td><td>Flags tool output, and Reads from outside the repo, that give the model orders.</td></tr>

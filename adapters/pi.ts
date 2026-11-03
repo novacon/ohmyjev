@@ -2,13 +2,13 @@ import { asSummary, judgeable, select } from '../hooks/compact.ts'
 import { readFile } from 'node:fs/promises'
 import {
   githubCheckpoint, BASH_Q, EXFIL_Q, ROUTE_Q, SCREEN_Q, STOP_Q, SWITCHED_Q, WRITE_Q,
-  TIER_LABELS, builtinRoute, clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, configCommand,
+  TIER_LABELS, builtinRoute, clip, decideRoute, denyText, gateBash, gateExfil, gateWrite, jevRouteLine, judgeStop, pathDenyText, callSummary, clipTail, plainRead, clearedByCode, configCommand,
   BROWSE_DESCRIPTION, BROWSE_SCHEMA, OMJ_HELP, OMJ_OFF, OMJ_ON, toggleArg,
   keepInstructions, readConfig, routeStep, screen, stepLine, withPolicies, withPolicyQ,
   type Config, type Route,
 } from '../hooks/policy.ts'
 import {
-  ASK_DESCRIPTION, ASK_SCHEMA, FIND_DESCRIPTION, FIND_SCHEMA, Session, answerAsk, answerFind, newStuck, runBrowse, stuckNote, trimOutput, keyOf, pathAllowed, repoRoot,
+  ASK_DESCRIPTION, ASK_SCHEMA, FIND_DESCRIPTION, FIND_SCHEMA, Session, answerAsk, answerFind, newStuck, runBrowse, stuckNote, trimOutput, keyOf, loadStoredKey, pathAllowed, repoRoot,
   type Env, type Fetch,
 } from './shared.ts'
 
@@ -247,12 +247,13 @@ async function classifyBuiltin(ctx: PiContext, c: Config, request: string): Prom
   )
   if (response.stopReason === 'error') return undefined
   const label = response.content.filter((part): part is TextContent => part.type === 'text').map(part => part.text).join('').trim()
-  return builtinRoute(label)
+  return builtinRoute(label, request)
 }
 
 export function createExtension(options: PiAdapterOptions = {}) {
   return async (pi: PiExtensionAPI): Promise<void> => {
     const env: Env = options.env ?? process.env
+    await loadStoredKey(env, !options.env)
     // Claude Code started by pi-claude-bridge inherits this, and leaves pi's bridged tools to this copy (it runs them).
     process.env.OHMYJEV_PI = '1'
     const initialCwd = options.cwd ?? process.cwd()
@@ -318,7 +319,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
 
     const applyRoute = async (ctx: PiContext, selected: Route): Promise<void> => {
       const x = await ensureSession(ctx)
-      const before = { model: ctx.model?.id ?? '', effort: userThinking }
+      const before = { model: ctx.model?.id ?? '', effort: userThinking, percent: ctx.getContextUsage()?.percent ?? 0 }
       const planned = routeStep(selected, before, c)
       let modelApplied = false
       if (planned.patch.model) {
@@ -482,7 +483,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
       if (keyOf(c, env)) {
         const d = await x.decide('turn.start', '', { request: clip(text, 1500) }, ROUTE_Q)
         if (!d) return
-        route = decideRoute(d.answers, c)
+        route = decideRoute(d.answers, c, text)
         say(ctx, jevRouteLine(d.answers, d.e.ms))
         x.record(d, null, `${route.tier} (${route.tierConf?.toFixed(2) ?? 'n/d'}), ${route.effort} (${route.effortConf?.toFixed(2) ?? 'n/d'})`)
       } else {
@@ -500,18 +501,18 @@ export function createExtension(options: PiAdapterOptions = {}) {
       const x = await ensureSession(ctx)
       const tool = event.toolName
       const input = event.input
-      if (!c.lockdown && c.githubReminders) {
+      if ((!c.lockdown || c.shadow) && c.githubReminders) {
         const note = githubCheckpoint(tool, input, githubSeen)
         if (note) return { block: true, reason: note }
       }
       if ((tool === 'bash' || tool === 'powershell') && c.lockdown && c.bashGate) {
         const command = arg(input, 'command')
-        if (plainRead(command, c)) return // ls, git status, grep: code says read-only, no Jev call
+        if (clearedByCode(command, c)) return // ls, git status, mv a b: code clears it, no Jev call
         const state = withPolicies({ command: clip(command, CLIP), cwd: ctx.cwd, ...(command.length > CLIP ? { truncated: true } : {}) }, c, userRequest, blockedBefore)
         const d = await x.decide('tool.call', tool, state, withPolicyQ(BASH_Q, c, userRequest))
         if (!d) return
         const judged = gateBash(d.answers, c)
-        x.record(d, judged.verdict, judged.reason)
+        x.record(d, judged.verdict, judged.reason, callSummary(tool, input))
         if (judged.verdict === 'deny') {
           lastBlocked = callSummary(tool, input)
           return { block: true, reason: denyText(judged.reason) }
@@ -521,14 +522,13 @@ export function createExtension(options: PiAdapterOptions = {}) {
       if ((tool === 'write' || tool === 'edit') && c.lockdown && c.writeGate) {
         const path = arg(input, 'path')
         if (!(await pathAllowed(path, ctx.cwd, root, c, env))) {
-          x.denyByCode(tool, `${path} is outside the repo and allowPaths`)
-          return { block: true, reason: pathDenyText(path) }
+          if (x.denyByCode(tool, `${path} is outside the repo and allowPaths`, callSummary(tool, input))) return { block: true, reason: pathDenyText(path) }
         }
         const content = tool === 'write' ? arg(input, 'content') : json(input.edits)
         const d = await x.decide('tool.call', tool, withPolicies({ path, content: clip(content, CLIP) }, c, userRequest, blockedBefore), withPolicyQ(WRITE_Q, c, userRequest))
         if (!d) return
         const judged = gateWrite(d.answers, c)
-        x.record(d, judged.verdict, judged.reason)
+        x.record(d, judged.verdict, judged.reason, callSummary(tool, input))
         if (judged.verdict === 'deny') {
           lastBlocked = callSummary(tool, input)
           return { block: true, reason: denyText(judged.reason) }
@@ -544,7 +544,7 @@ export function createExtension(options: PiAdapterOptions = {}) {
         )
         if (!d) return
         const judged = gateExfil(d.answers, c)
-        x.record(d, judged.verdict, judged.reason)
+        x.record(d, judged.verdict, judged.reason, callSummary(tool, input))
         if (judged.verdict === 'deny') {
           lastBlocked = callSummary(tool, input)
           return { block: true, reason: denyText(judged.reason) }
@@ -598,11 +598,12 @@ export function createExtension(options: PiAdapterOptions = {}) {
       const questions = state.previous_requests.length ? { ...STOP_Q, ...SWITCHED_Q } : STOP_Q
       const d = await x.decide('Stop', '', state, questions)
       if (!d) return
-      const judged = judgeStop(d.answers, c, state.tools_this_turn.length > 0)
-      const block = c.lockdown && c.doneCheck ? judged.block : null
+      const judged = judgeStop(d.answers, c, state.tools_this_turn)
+      const would = c.lockdown && c.doneCheck ? judged.block : null
+      const block = c.shadow ? null : would
       if (block) pushedBackAt = count
       if (c.autoCompact && judged.wantsCompact) compactPending = true
-      x.record(d, block ? 'block' : null, block ?? (judged.wantsCompact ? 'task switched' : 'stop ok'))
+      x.record(d, block ? 'block' : would ? 'shadow' : null, block ?? (would ? `would block: ${would}` : judged.wantsCompact ? 'task switched' : 'stop ok'), would ? 'Stop' : undefined)
       if (!block) return
       return {
         entries: [...event.entries, { type: 'custom_message', customType: 'ohmyjev', content: block, display: true }],

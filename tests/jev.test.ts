@@ -17,9 +17,11 @@ test('validate rejects bad answers and never echoes the returned value', () => {
   expect(kept.q).toEqual({ type: 'choice', choice: 'a', confidence: 0.9 })
 })
 
-test('key order: config, then TYPESAFE, then OPENROUTER; the model follows the provider', () => {
+test('key order: config, then TYPESAFE, then the stored key, then OPENROUTER; the model follows the provider', () => {
   expect(pickKey('cfg', 'jev-1.13.0', 'ts', 'or')?.source).toBe('config apiKey')
   expect(pickKey('', 'jev-1.13.0', 'ts', 'or')).toMatchObject({ source: 'env TYPESAFE_API_KEY', model: 'jev-1.13.0' })
+  expect(pickKey('', 'jev-1.13.0', 'ts', 'or', 'kc')?.source).toBe('env TYPESAFE_API_KEY')
+  expect(pickKey('', 'jev-1.13.0', undefined, 'or', 'kc')).toMatchObject({ provider: 'typesafe', key: 'kc', source: 'stored (ohmyjev key)' })
   expect(pickKey('', 'jev-1.13.0', undefined, 'or')).toMatchObject({ provider: 'openrouter', model: '~typesafe/jev-latest' })
   expect(pickKey('', 'jev-1.13.0')).toBe(null)
 })

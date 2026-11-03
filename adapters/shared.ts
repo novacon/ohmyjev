@@ -7,9 +7,9 @@ import { execFile } from 'node:child_process'
 import { appendFile, chmod, lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises'
 import { find, sweep, type CodeIO } from '../hooks/code.ts'
 import { dashboardHtml } from '../hooks/dashboard.ts'
-import { ENDPOINTS, JevError, parseReply, pickKey, type Key } from '../hooks/jev.ts'
+import { ENDPOINTS, JevError, KEY_FILE, KEY_READERS, parseReply, pickKey, type Key } from '../hooks/jev.ts'
 import {
-  BROWSE_TIMEOUT_MS, DASHBOARD, EMPTY_SESSION, EXFIL_Q, SCREEN_Q, browseCommand, browseReply, denyText, gateExfil, screen, withPolicies, withPolicyQ, absolute, buildQuestion, clip, expandRoot, hostPath, isUnder, normalize, parseLog, parseWorktrees, rawAbsolute, sanitizeSid,
+  BROWSE_TIMEOUT_MS, DASHBOARD, EMPTY_SESSION, EXFIL_Q, SCREEN_Q, browseCommand, browseReply, callSummary, denyText, gateExfil, screen, withPolicies, withPolicyQ, absolute, buildQuestion, clip, expandRoot, hostPath, isUnder, normalize, parseLog, parseWorktrees, rawAbsolute, sanitizeSid,
   STUCK_Q, maskSecrets, trimChunks, trimRequest, trimmed, failureOf, judgeStuck, stuckDue, stuckState, splitList, statusText, summarize, type Failure, type Answers, type Config, type LogEntry, type Questions, type SessionState, type Verdict,
 } from '../hooks/policy.ts'
 
@@ -17,7 +17,27 @@ export type Env = Readonly<Record<string, string | undefined>>
 const DOWN_MS = 5 * 60_000
 
 /** Config apiKey, then $TYPESAFE_API_KEY, then $OPENROUTER_API_KEY; null when none is set. */
-export const keyOf = (c: Config, env: Env): Key | null => pickKey(c.apiKey, c.jevModel, env.TYPESAFE_API_KEY, env.OPENROUTER_API_KEY)
+export const keyOf = (c: Config, env: Env): Key | null =>
+  pickKey(c.apiKey, c.jevModel, env.TYPESAFE_API_KEY, env.OPENROUTER_API_KEY, storedKeys.get(env.HOME ?? ''))
+
+const storedKeys = new Map<string, string>() // HOME -> the key `ohmyjev key` stored there
+/**
+ * Read the key `ohmyjev key` stored, once per home folder, so keyOf finds it. The OS secret store is the person's
+ * own, so it is asked only for the real environment (`secretStore`); a test or embedding with its own env reads the
+ * file under its HOME alone.
+ */
+export async function loadStoredKey(env: Env, secretStore: boolean): Promise<void> {
+  const home = env.HOME ?? ''
+  if (env.TYPESAFE_API_KEY || storedKeys.has(home)) return
+  let key = ''
+  for (const argv of secretStore ? KEY_READERS : []) {
+    key = await new Promise<string>(resolve =>
+      execFile(argv[0]!, argv.slice(1), { timeout: 2000 }, (err, stdout) => resolve(err ? '' : String(stdout).trim())))
+    if (key) break
+  }
+  if (!key) key = (await readFile(`${home}/${KEY_FILE}`, 'utf8').catch(() => '')).trim()
+  storedKeys.set(home, key)
+}
 
 /** The one fetch shape ohmyjev uses; tests pass a fake. */
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>
@@ -127,9 +147,10 @@ export class Session {
     }
   }
 
-  record(d: Decision, verdict: Verdict, reason: string): void {
+  record(d: Decision, verdict: Verdict, reason: string, call?: string): void {
     d.e.verdict = verdict
     d.e.reason = reason
+    if (verdict === 'shadow' && call) d.e.call = call
     if (verdict === 'deny' || verdict === 'block') this.s.denies++
     this.save()
     this.log(d.e)
@@ -149,11 +170,16 @@ export class Session {
     return `dashboard: ${path}${(await open(path)) ? ' (opened in your browser)' : ' (open it in a browser)'}`
   }
 
-  /** A deny decided by code (a path), counted and logged like Jev's. */
-  denyByCode(tool: string, reason: string): void {
+  /** A deny decided by code (a path), counted and logged like Jev's. False in shadow: logged with the call, not blocked. */
+  denyByCode(tool: string, reason: string, call = ''): boolean {
+    if (this.c.shadow) {
+      this.log({ event: 'tool_call', tool, verdict: 'shadow', reason: `would block: ${reason}`, ...(call ? { call } : {}) })
+      return false
+    }
     this.s.denies++
     this.save()
     this.log({ event: 'tool_call', tool, verdict: 'deny', reason })
+    return true
   }
 
   noteRoute(label: string): void {
@@ -311,7 +337,7 @@ export async function runBrowse(
     const d = await x.decide('tool.call', 'browse', state, withPolicyQ(EXFIL_Q, c, request))
     if (d) {
       const j = gateExfil(d.answers, c)
-      x.record(d, j.verdict, j.reason)
+      x.record(d, j.verdict, j.reason, callSummary('browse', input))
       if (j.verdict === 'deny') return { deny: denyText(j.reason) }
     }
   }

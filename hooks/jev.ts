@@ -17,10 +17,23 @@ export const ENDPOINTS = {
 export type Provider = keyof typeof ENDPOINTS
 export type Key = { provider: Provider; key: string; source: string; model: string }
 
-/** Config apiKey, then $TYPESAFE_API_KEY, then $OPENROUTER_API_KEY; the model goes with the provider. */
-export function pickKey(apiKey: string, jevModel: string, ts?: string, or?: string): Key | null {
+/**
+ * Where `ohmyjev key` keeps the key: the OS secret store (macOS Keychain, Linux secret-tool), else a 0600 file under
+ * the home folder. Each reader prints the key alone; any failure means no stored key.
+ */
+export const KEY_SERVICE = 'ohmyjev'
+export const KEY_ACCOUNT = 'typesafe'
+export const KEY_FILE = '.ohmyjev/key'
+export const KEY_READERS: readonly (readonly string[])[] = [
+  ['security', 'find-generic-password', '-s', KEY_SERVICE, '-a', KEY_ACCOUNT, '-w'],
+  ['secret-tool', 'lookup', 'service', KEY_SERVICE, 'account', KEY_ACCOUNT],
+]
+
+/** Config apiKey, then $TYPESAFE_API_KEY, then the stored key, then $OPENROUTER_API_KEY; the model goes with the provider. */
+export function pickKey(apiKey: string, jevModel: string, ts?: string, or?: string, stored?: string): Key | null {
   if (apiKey) return { provider: 'typesafe', key: apiKey, source: 'config apiKey', model: jevModel }
   if (ts) return { provider: 'typesafe', key: ts, source: 'env TYPESAFE_API_KEY', model: jevModel }
+  if (stored) return { provider: 'typesafe', key: stored, source: 'stored (ohmyjev key)', model: jevModel }
   if (or) return { provider: 'openrouter', key: or, source: 'env OPENROUTER_API_KEY', model: '~typesafe/jev-latest' }
   return null
 }

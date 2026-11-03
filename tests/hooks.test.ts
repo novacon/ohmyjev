@@ -1,6 +1,6 @@
 import type { On, SessionMessage } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { BLOCK_NOTICE, DONE_REASON } from '../hooks/policy.ts'
+import { BLOCK_NOTICE, DONE_REASON, FAILED_CHECK_REASON } from '../hooks/policy.ts'
 import { bashAns, flush, harness, nouls, writeAns } from './harness.ts'
 import type { Answers } from '../hooks/policy.ts'
 
@@ -25,6 +25,23 @@ test('irreversible bash is denied before it runs', { options: { lockdown: true }
   await flush()
   expect(fake.logs.at(-1)).toMatchObject({ event: 'tool.call', tool: 'Bash', verdict: 'deny' })
   expect(JSON.parse(fake.files[STATE]!)).toMatchObject({ calls: 1, denies: 1 })
+})
+
+test('shadow: lockdown decides and logs, nothing is blocked, and /omj lists what would have been', { options: { shadow: true } }, async ($, on) => {
+  const fake = harness(on, () => bashAns('irreversible', 0.95, 0.9))
+  const t = tool(on)
+  expect((await $.tool.call({ tool: 'Bash', command: 'rm -rf build' })).deny).toBe(undefined)
+  expect((await $.tool.call({ tool: 'Write', file_path: '/etc/hosts', content: 'x' })).deny).toBe(undefined)
+  expect((await $.tool.call({ tool: 'Bash', command: 'mv notes.md docs/' })).deny).toBe(undefined) // cleared by code
+  expect(t.ran).toBe(3)
+  expect(fake.requests.filter(r => 'effect' in r.body.questions).length).toBe(1) // the move never reached Jev
+  await flush()
+  expect(fake.logs.map(l => l.verdict).filter(Boolean)).toEqual(['shadow', 'shadow'])
+  fake.files['/home/u/.ohmyjev/log/test-session.jsonl'] = fake.logs.map(l => '\n' + JSON.stringify(l)).join('\n')
+  const r = await $.command.run({ command: 'omj', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false } } as never)
+  expect(r.text).toContain('would block (shadow): 2')
+  expect(r.text).toContain('Bash {"command":"rm -rf build"}: would block: irreversible (0.95)')
+  expect(r.text).toContain('/etc/hosts is outside the repo')
 })
 
 test('a middling answer passes through', { options: { lockdown: true } }, async ($, on) => {
@@ -153,7 +170,7 @@ test('done-check pushes back once per request, with each tool call and its outco
     ]),
   ]
   const fake = harness(on, () => stopAns({ claimed_done: 0.9, verified: 0.1 }), { messages })
-  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'All done.' })).block).toBe(DONE_REASON)
+  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'All done.' })).block).toBe(FAILED_CHECK_REASON) // the build failed
   const state = fake.requests[0]?.body.state as { current_request: string; tools_this_turn: Array<{ outcome: string }> }
   expect(state.current_request).toBe('build the feature')
   expect(state.tools_this_turn.map(t => t.outcome)).toEqual(['ok', 'backgrounded', 'failed'])
